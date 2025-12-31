@@ -1,0 +1,46 @@
+[package]
+name = "prism-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.prism]
+path = ".."
+
+[[bin]]
+name = "fuzz_config_parser"
+path = "fuzz_targets/fuzz_config_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_path_matcher"
+path = "fuzz_targets/fuzz_path_matcher.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_header_parser"
+path = "fuzz_targets/fuzz_header_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_url_parser"
+path = "fuzz_targets/fuzz_url_parser.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
