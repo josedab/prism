@@ -1,0 +1,21 @@
+apiVersion: v2
+name: prism
+description: High-performance, memory-safe reverse proxy written in Rust
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+home: https://github.com/your-org/prism
+sources:
+  - https://github.com/your-org/prism
+maintainers:
+  - name: Prism Contributors
+    email: prism@example.com
+keywords:
+  - proxy
+  - reverse-proxy
+  - load-balancer
+  - api-gateway
+  - rust
+annotations:
+  artifacthub.io/license: MIT
+  artifacthub.io/category: networking
