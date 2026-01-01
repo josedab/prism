@@ -1,0 +1,134 @@
+# Prism Configuration Example
+# High-Performance Reverse Proxy
+
+# Listener configurations
+listeners:
+  # HTTP listener
+  - address: "0.0.0.0:8080"
+    protocol: http
+    max_connections: 10000
+
+  # HTTPS listener (uncomment and configure TLS)
+  # - address: "0.0.0.0:8443"
+  #   protocol: https
+  #   max_connections: 10000
+  #   tls:
+  #     cert: /etc/prism/cert.pem
+  #     key: /etc/prism/key.pem
+  #     alpn: ["h2", "http/1.1"]
+  #     min_version: "1.2"
+
+# Upstream backend configurations
+upstreams:
+  # API backend
+  api_backend:
+    servers:
+      - address: "127.0.0.1:3000"
+        weight: 5
+      - address: "127.0.0.1:3001"
+        weight: 5
+    load_balancing: least_connections
+    health_check:
+      check_type: http
+      path: /health
+      interval: 10s
+      timeout: 5s
+      unhealthy_threshold: 3
+      healthy_threshold: 2
+    pool:
+      max_connections: 100
+      min_idle: 10
+      idle_timeout: 60s
+      max_lifetime: 1h
+    connect_timeout: 5s
+    request_timeout: 30s
+
+  # Static content backend
+  static_backend:
+    servers:
+      - address: "127.0.0.1:8000"
+    load_balancing: round_robin
+    health_check:
+      check_type: tcp
+      interval: 30s
+      timeout: 5s
+
+# Route configurations
+routes:
+  # API routes
+  - match:
+      host: "api.example.com"
+      path_prefix: "/v1"
+    upstream: api_backend
+    middlewares:
+      - rate_limit:
+          requests_per_second: 100
+          burst: 50
+          key_by: ip
+      - headers:
+          request_add:
+            X-Forwarded-Proto: "https"
+          response_add:
+            X-Content-Type-Options: "nosniff"
+            X-Frame-Options: "DENY"
+
+  # Health check endpoint
+  - match:
+      path: "/health"
+    handler:
+      type: static
+      status: 200
+      body: "OK"
+    priority: -100
+
+  # Metrics endpoint
+  - match:
+      path: "/metrics"
+    handler:
+      type: static
+      status: 200
+      body: "# Metrics endpoint"
+    priority: -100
+
+  # Static content
+  - match:
+      path_prefix: "/static"
+    upstream: static_backend
+    rewrite:
+      pattern: "^/static"
+      replacement: ""
+
+  # Default route
+  - match:
+      path_prefix: "/"
+    upstream: api_backend
+    priority: 100
+
+# Observability configuration
+observability:
+  metrics:
+    enabled: true
+    path: /metrics
+    per_route: true
+  tracing:
+    enabled: false
+    exporter: jaeger
+    endpoint: "http://jaeger:14268/api/traces"
+    sample_rate: 1.0
+  access_log:
+    enabled: true
+    format: json
+    # path: /var/log/prism/access.log
+
+# Admin API (optional)
+# admin:
+#   address: "127.0.0.1:9090"
+#   auth_enabled: true
+#   api_key: "your-secret-api-key"
+
+# Global settings
+global:
+  worker_threads: 4
+  max_body_size: 10485760  # 10MB
+  shutdown_timeout: 30s
+  http2: true

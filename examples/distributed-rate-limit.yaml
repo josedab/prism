@@ -1,0 +1,116 @@
+# Distributed Rate Limiting Configuration Example
+# Uses Redis for cluster-wide rate limiting across multiple Prism instances
+
+listeners:
+  - address: "0.0.0.0:8080"
+    protocol: http
+
+upstreams:
+  api:
+    servers:
+      - address: "api-server-1:8080"
+      - address: "api-server-2:8080"
+      - address: "api-server-3:8080"
+    load_balancing: round_robin
+    health_check:
+      check_type: http
+      path: /health
+      interval: 10s
+
+routes:
+  # Public API - strict rate limiting
+  - match:
+      path_prefix: /api/public/
+    upstream: api
+    # Rate limiting is configured at middleware level below
+
+  # Internal API - higher limits
+  - match:
+      path_prefix: /api/internal/
+      headers:
+        - name: X-Internal-Token
+          exact: "internal-secret"
+    upstream: api
+
+  # Default route
+  - match:
+      path_prefix: /
+    upstream: api
+
+middleware:
+  - rate_limit:
+      requests_per_second: 100
+      burst: 200
+      key_by: ip
+      # Distributed settings (requires 'distributed-rate-limit' feature)
+      # These are applied when running with Redis backend
+      # redis_url: "redis://redis:6379"
+      # key_prefix: "prism:ratelimit"
+
+global:
+  shutdown_timeout: 30s
+
+# ============================================================
+# Distributed Rate Limiting Setup
+# ============================================================
+#
+# When running multiple Prism instances behind a load balancer,
+# use Redis for coordinated rate limiting:
+#
+# 1. Enable the feature when building:
+#    cargo build --release --features distributed-rate-limit
+#
+# 2. Deploy Redis:
+#    docker run -d --name redis -p 6379:6379 redis:7-alpine
+#
+# 3. Configure environment variables:
+#    PRISM_REDIS_URL=redis://redis:6379
+#
+# Rate Limiting Algorithm:
+# - Uses sliding window with Redis sorted sets
+# - Atomic Lua scripts for consistency
+# - Automatic key expiration
+# - Fallback to local limiting on Redis failures
+#
+# Redis Key Structure:
+#   prism:ratelimit:<key> -> sorted set with timestamps
+#
+# Scaling Considerations:
+# - Redis handles ~100K+ operations/second
+# - Use Redis Cluster for higher throughput
+# - Consider read replicas for GET operations
+#
+# Docker Compose Example:
+# -----------------------
+# services:
+#   prism-1:
+#     image: prism:latest
+#     environment:
+#       PRISM_REDIS_URL: redis://redis:6379
+#     depends_on:
+#       - redis
+#
+#   prism-2:
+#     image: prism:latest
+#     environment:
+#       PRISM_REDIS_URL: redis://redis:6379
+#     depends_on:
+#       - redis
+#
+#   redis:
+#     image: redis:7-alpine
+#     volumes:
+#       - redis-data:/data
+#
+#   load-balancer:
+#     image: nginx:alpine
+#     ports:
+#       - "80:80"
+#     depends_on:
+#       - prism-1
+#       - prism-2
+#
+# volumes:
+#   redis-data:
+#
+# ============================================================

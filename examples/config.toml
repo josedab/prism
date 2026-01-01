@@ -1,0 +1,79 @@
+# Example TOML Configuration
+# Alternative to YAML format
+
+[[listeners]]
+address = "0.0.0.0:8080"
+protocol = "http"
+max_connections = 10000
+
+[upstreams.backend]
+load_balancing = "round_robin"
+connect_timeout = "5s"
+request_timeout = "30s"
+
+[[upstreams.backend.servers]]
+address = "127.0.0.1:3000"
+weight = 1
+enabled = true
+
+[[upstreams.backend.servers]]
+address = "127.0.0.1:3001"
+weight = 1
+enabled = true
+
+[upstreams.backend.health_check]
+check_type = "http"
+path = "/health"
+expected_status = 200
+interval = "10s"
+timeout = "5s"
+unhealthy_threshold = 3
+healthy_threshold = 2
+
+[upstreams.backend.pool]
+max_connections = 100
+min_idle = 10
+max_lifetime = "1h"
+idle_timeout = "60s"
+
+[upstreams.backend.circuit_breaker]
+failure_threshold = 5
+success_threshold = 3
+half_open_timeout = "30s"
+
+[upstreams.backend.retry]
+max_retries = 3
+retry_on = [502, 503, 504]
+initial_delay = "100ms"
+max_delay = "5s"
+
+[[routes]]
+priority = 0
+upstream = "backend"
+
+[routes.match]
+path_prefix = "/"
+
+[[routes.middlewares]]
+[routes.middlewares.rate_limit]
+requests_per_second = 100
+burst = 200
+key_by = "ip"
+
+[observability.metrics]
+enabled = true
+path = "/metrics"
+per_route = true
+
+[observability.access_log]
+enabled = true
+format = "json"
+
+[admin]
+address = "127.0.0.1:9090"
+auth_enabled = false
+
+[global]
+max_body_size = 10485760
+shutdown_timeout = "30s"
+http2 = true

@@ -1,0 +1,280 @@
+# Full-Featured Configuration
+# Comprehensive example demonstrating all Prism next-gen features
+#
+# Run with: cargo run --features full -- --config examples/full-featured.yaml
+#
+# This configuration showcases:
+# - HTTP/3 with QUIC (requires: http3)
+# - io_uring async I/O (requires: io_uring, Linux 5.1+)
+# - SPIFFE zero-trust (requires: spiffe)
+# - xDS Envoy compatibility (requires: xds)
+# - Kubernetes Gateway API (requires: kubernetes)
+# - Edge compute functions (requires: edge)
+# - WASM plugins (requires: plugins)
+# - AI anomaly detection (requires: anomaly-detection)
+# - eBPF observability (requires: ebpf, Linux)
+# - GraphQL routing (requires: graphql)
+
+listeners:
+  # HTTP/1.1 and HTTP/2
+  - address: "0.0.0.0:8080"
+    protocol: http
+
+  # HTTPS with HTTP/2
+  - address: "0.0.0.0:8443"
+    protocol: https
+    tls:
+      cert_file: "/etc/prism/certs/server.crt"
+      key_file: "/etc/prism/certs/server.key"
+      alpn_protocols: ["h2", "http/1.1"]
+
+upstreams:
+  api-v1:
+    servers:
+      - address: "api-v1.internal:8080"
+        weight: 10
+      - address: "api-v1-backup.internal:8080"
+        weight: 5
+    load_balancing: weighted_round_robin
+    health_check:
+      enabled: true
+      path: "/health"
+      interval: "10s"
+    circuit_breaker:
+      error_threshold: 10
+      recovery_time: "30s"
+    pool:
+      max_connections: 100
+      idle_timeout: "60s"
+
+  api-v2:
+    servers:
+      - address: "api-v2.internal:8080"
+    load_balancing: least_connections
+    health_check:
+      enabled: true
+      path: "/ready"
+      interval: "5s"
+
+  graphql-api:
+    servers:
+      - address: "graphql.internal:4000"
+    load_balancing: round_robin
+
+  websocket-backend:
+    servers:
+      - address: "ws.internal:9000"
+    load_balancing: ip_hash
+
+routes:
+  # API v2 (canary)
+  - match:
+      path_prefix: "/api/v2/"
+      headers:
+        X-Canary: "true"
+    upstream: api-v2
+    priority: 100
+
+  # API v1 (default)
+  - match:
+      path_prefix: "/api/"
+    upstream: api-v1
+    middlewares:
+      - type: rate_limit
+        requests_per_second: 1000
+        burst: 200
+      - type: compression
+        algorithms: [gzip, brotli]
+        min_size: 1024
+
+  # GraphQL endpoint
+  - match:
+      path: "/graphql"
+      methods: [POST, GET]
+    upstream: graphql-api
+
+  # WebSocket upgrade
+  - match:
+      path_prefix: "/ws/"
+      headers:
+        Upgrade: "websocket"
+    upstream: websocket-backend
+
+observability:
+  metrics:
+    enabled: true
+    path: "/metrics"
+    include_histograms: true
+    buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+  access_log:
+    enabled: true
+    format: json
+    fields:
+      - request_id
+      - method
+      - path
+      - status
+      - duration_ms
+      - upstream
+      - client_ip
+  tracing:
+    enabled: true
+    sampling_rate: 0.1
+    exporter: "otlp"
+    endpoint: "http://jaeger:4317"
+
+admin:
+  enabled: true
+  address: "127.0.0.1:9090"
+  endpoints:
+    - /health
+    - /ready
+    - /config
+    - /stats
+    - /upstream/status
+
+# HTTP/3 Configuration
+# Requires feature: http3
+http3:
+  enabled: true
+  port: 443
+  max_idle_timeout_ms: 30000
+  initial_rtt_ms: 100
+  max_udp_payload_size: 1350
+  congestion_control: "cubic"
+
+# io_uring Configuration (Linux only)
+# Requires feature: io_uring
+io_uring:
+  enabled: true
+  entries: 4096
+  submission_queue_poll: true
+  io_poll: false
+  sq_poll_idle_ms: 1000
+  max_registered_fds: 1024
+  buffer_pool_size: 256
+  buffer_size: 16384
+
+# SPIFFE/SPIRE Zero-Trust Identity
+# Requires feature: spiffe
+spiffe:
+  workload_api_socket: "unix:///run/spiffe/sockets/agent.sock"
+  trust_domain: "cluster.local"
+  svid_refresh_interval_secs: 300
+  timeout_secs: 30
+  authorization_rules:
+    - name: "frontend-to-api"
+      allowed_spiffe_ids:
+        - "spiffe://cluster.local/ns/default/sa/frontend"
+      paths:
+        - "/api/*"
+
+# xDS Configuration
+# Requires feature: xds
+xds:
+  server_address: "istiod.istio-system:15010"
+  node_id: "sidecar~10.0.0.1~prism~default.svc.cluster.local"
+  cluster: "prism-gateway"
+  initial_fetch_timeout_secs: 30
+  refresh_interval_secs: 15
+  resource_types:
+    - listener
+    - cluster
+    - route
+    - endpoint
+    - secret
+
+# Kubernetes Gateway API
+# Requires feature: kubernetes
+kubernetes:
+  namespace: "prism-system"
+  gateway_class_name: "prism"
+  leader_election: true
+  reconcile_interval_secs: 30
+  watch_namespaces:
+    - "default"
+    - "production"
+    - "staging"
+
+# Edge Compute Runtime
+# Requires feature: edge
+edge:
+  max_memory_mb: 256
+  execution_timeout_ms: 30000
+  max_concurrent: 200
+  kv_namespaces:
+    - name: "CACHE"
+      persist: false
+    - name: "CONFIG"
+      persist: true
+  functions:
+    - name: "request-rewriter"
+      path: "/etc/prism/functions/rewriter.wasm"
+
+# WASM Plugin System
+# Requires feature: plugins
+plugins:
+  plugin_dir: "/etc/prism/plugins"
+  max_memory_pages: 512
+  enable_wasi: true
+  plugins:
+    - name: "custom-auth"
+      path: "auth.wasm"
+      phase: "request"
+      priority: 100
+
+# AI Anomaly Detection
+# Requires feature: anomaly-detection
+anomaly_detection:
+  enabled: true
+  model_type: "isolation_forest"
+  sensitivity: 0.85
+  training_window_secs: 3600
+  detection_threshold: 0.9
+  features:
+    request_rate: true
+    response_time: true
+    error_rate: true
+    payload_size: true
+    geographic_distribution: true
+  alert_webhook: "https://pagerduty.example.com/webhook"
+
+# eBPF Observability (Linux only)
+# Requires feature: ebpf
+ebpf:
+  enabled: true
+  programs:
+    - type: "tcp_retransmit"
+      enabled: true
+    - type: "syscall_latency"
+      enabled: true
+    - type: "socket_filter"
+      enabled: true
+    - type: "connection_tracking"
+      enabled: true
+  metrics_interval_secs: 5
+  ring_buffer_size_kb: 8192
+
+# GraphQL-Aware Routing
+# Requires feature: graphql
+graphql:
+  enabled: true
+  introspection_enabled: false
+  max_depth: 15
+  max_complexity: 2000
+  operation_routes:
+    - operation: "GetUser"
+      type: "query"
+      upstream: "user-service"
+      cache_ttl_secs: 60
+    - operation: "CreateOrder"
+      type: "mutation"
+      upstream: "order-service"
+      rate_limit:
+        requests_per_minute: 60
+
+global:
+  worker_threads: 0  # 0 = auto-detect CPU cores
+  max_connections: 100000
+  shutdown_timeout: "30s"
+  buffer_size: 32768

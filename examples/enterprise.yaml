@@ -1,0 +1,123 @@
+# Enterprise Configuration
+# Zero-trust service mesh features: SPIFFE, xDS, Kubernetes Gateway API,
+# AI anomaly detection, and eBPF observability
+#
+# Run with: cargo run --features enterprise -- --config examples/enterprise.yaml
+
+listeners:
+  - address: "0.0.0.0:8080"
+    protocol: http
+  - address: "0.0.0.0:8443"
+    protocol: https
+    tls:
+      cert_file: "/etc/prism/certs/server.crt"
+      key_file: "/etc/prism/certs/server.key"
+      # Enable mTLS for zero-trust
+      client_auth: required
+      client_ca_file: "/etc/prism/certs/ca.crt"
+
+upstreams:
+  api-service:
+    servers:
+      - address: "api-service.default.svc.cluster.local:8080"
+    load_balancing: least_connections
+    health_check:
+      enabled: true
+      path: "/health"
+      interval: "10s"
+    circuit_breaker:
+      error_threshold: 5
+      recovery_time: "30s"
+
+routes:
+  - match:
+      path_prefix: "/api/"
+    upstream: api-service
+    middlewares:
+      - type: rate_limit
+        requests_per_second: 1000
+        burst: 100
+
+observability:
+  metrics:
+    enabled: true
+    path: "/metrics"
+  access_log:
+    enabled: true
+    format: json
+  tracing:
+    enabled: true
+    sampling_rate: 0.1
+
+# SPIFFE/SPIRE Zero-Trust Identity
+# Requires feature: spiffe
+spiffe:
+  workload_api_socket: "unix:///run/spiffe/sockets/agent.sock"
+  trust_domain: "example.org"
+  svid_refresh_interval_secs: 300
+  timeout_secs: 30
+  authorization_rules:
+    - name: "allow-api-service"
+      allowed_spiffe_ids:
+        - "spiffe://example.org/ns/default/sa/api-service"
+      paths:
+        - "/api/*"
+
+# Envoy xDS API Compatibility
+# Requires feature: xds
+xds:
+  server_address: "xds-server.istio-system.svc.cluster.local:15010"
+  node_id: "prism-gateway-01"
+  cluster: "prism-cluster"
+  initial_fetch_timeout_secs: 30
+  refresh_interval_secs: 30
+  resource_types:
+    - listener
+    - cluster
+    - route
+    - endpoint
+
+# Kubernetes Gateway API
+# Requires feature: kubernetes
+kubernetes:
+  namespace: "default"
+  gateway_class_name: "prism"
+  leader_election: true
+  reconcile_interval_secs: 30
+  watch_namespaces:
+    - "default"
+    - "production"
+
+# AI Anomaly Detection
+# Requires feature: anomaly-detection
+anomaly_detection:
+  enabled: true
+  model_type: "isolation_forest"
+  sensitivity: 0.8
+  training_window_secs: 3600
+  detection_threshold: 0.95
+  features:
+    request_rate: true
+    response_time: true
+    error_rate: true
+    payload_size: true
+  alert_webhook: "https://alerts.example.com/webhook"
+
+# eBPF Observability
+# Requires feature: ebpf (Linux only)
+ebpf:
+  enabled: true
+  programs:
+    - type: "tcp_retransmit"
+      enabled: true
+    - type: "syscall_latency"
+      enabled: true
+    - type: "socket_filter"
+      enabled: true
+  metrics_interval_secs: 10
+  ring_buffer_size_kb: 4096
+
+global:
+  worker_threads: 8
+  max_connections: 100000
+  shutdown_timeout: "30s"

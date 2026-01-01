@@ -1,0 +1,169 @@
+# API Gateway Configuration
+# Rate limiting, authentication, and multiple backend services
+
+listeners:
+  - address: "0.0.0.0:8080"
+    protocol: http
+    max_connections: 50000
+
+upstreams:
+  # User service
+  users_api:
+    servers:
+      - address: "users-service:8080"
+    load_balancing: least_connections
+    connect_timeout: 3s
+    request_timeout: 10s
+
+  # Orders service
+  orders_api:
+    servers:
+      - address: "orders-service:8080"
+    load_balancing: round_robin
+    connect_timeout: 3s
+    request_timeout: 30s
+
+  # Products service (multiple replicas)
+  products_api:
+    servers:
+      - address: "products-1:8080"
+      - address: "products-2:8080"
+      - address: "products-3:8080"
+    load_balancing: round_robin
+    health_check:
+      check_type: http
+      path: "/health"
+      interval: 10s
+
+  # Auth service
+  auth_api:
+    servers:
+      - address: "auth-service:8080"
+    connect_timeout: 2s
+    request_timeout: 5s
+
+routes:
+  # Health check endpoint (no auth)
+  - match:
+      path: "/health"
+    handler:
+      type: static
+      status: 200
+      body: '{"status": "healthy"}'
+      headers:
+        Content-Type: "application/json"
+    priority: 0
+
+  # Auth endpoints (strict rate limiting)
+  - match:
+      path_prefix: "/api/v1/auth"
+    upstream: auth_api
+    middlewares:
+      - rate_limit:
+          requests_per_second: 10
+          burst: 20
+          key_by: ip
+    priority: 10
+
+  # User API
+  - match:
+      path_prefix: "/api/v1/users"
+    upstream: users_api
+    middlewares:
+      - rate_limit:
+          requests_per_second: 100
+          burst: 200
+          key_by: ip
+      - headers:
+          request_add:
+            X-Service-Name: "users"
+          response_add:
+            X-Served-By: "prism"
+    rewrite:
+      pattern: "^/api/v1/users"
+      replacement: "/users"
+    priority: 20
+
+  # Orders API
+  - match:
+      path_prefix: "/api/v1/orders"
+    upstream: orders_api
+    middlewares:
+      - rate_limit:
+          requests_per_second: 50
+          burst: 100
+          key_by: ip
+      - timeout:
+          connect: 3s
+          read: 30s
+          write: 30s
+    rewrite:
+      pattern: "^/api/v1/orders"
+      replacement: "/orders"
+    priority: 20
+
+  # Products API (read-heavy, higher limits)
+  - match:
+      path_prefix: "/api/v1/products"
+      methods: ["GET"]
+    upstream: products_api
+    middlewares:
+      - rate_limit:
+          requests_per_second: 500
+          burst: 1000
+          key_by: ip
+    rewrite:
+      pattern: "^/api/v1/products"
+      replacement: "/products"
+    priority: 20
+
+  # Products API (write operations, stricter limits)
+  - match:
+      path_prefix: "/api/v1/products"
+      methods: ["POST", "PUT", "DELETE"]
+    upstream: products_api
+    middlewares:
+      - rate_limit:
+          requests_per_second: 20
+          burst: 50
+          key_by: ip
+    rewrite:
+      pattern: "^/api/v1/products"
+      replacement: "/products"
+    priority: 15
+
+  # Catch-all 404
+  - match:
+      path_prefix: "/"
+    handler:
+      type: static
+      status: 404
+      body: '{"error": "Not Found"}'
+      headers:
+        Content-Type: "application/json"
+    priority: 1000
+
+observability:
+  metrics:
+    enabled: true
+    path: "/internal/metrics"
+    per_route: true
+  access_log:
+    enabled: true
+    format: json
+  tracing:
+    enabled: true
+    exporter: jaeger
+    endpoint: "http://jaeger:14268/api/traces"
+    sample_rate: 0.1
+
+admin:
+  address: "127.0.0.1:9090"
+  auth_enabled: true
+  api_key: "${ADMIN_API_KEY}"
+
+global:
+  worker_threads: 4
+  max_body_size: 5242880  # 5MB
+  shutdown_timeout: 30s
+  http2: true

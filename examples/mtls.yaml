@@ -1,0 +1,71 @@
+# mTLS (Mutual TLS) Configuration Example
+# Requires client certificates for authentication
+
+listeners:
+  - address: "0.0.0.0:443"
+    protocol: https
+    tls:
+      cert: /etc/prism/certs/server.crt
+      key: /etc/prism/certs/server.key
+      # Client authentication mode
+      # - none: No client cert required (default)
+      # - optional: Client cert verified if provided
+      # - required: Client cert is mandatory
+      client_auth: required
+      # CA certificate for verifying client certs
+      client_ca: /etc/prism/certs/client-ca.crt
+      min_version: "1.2"
+      alpn:
+        - h2
+        - http/1.1
+
+upstreams:
+  internal_api:
+    servers:
+      - address: "internal-api:8080"
+    health_check:
+      check_type: http
+      path: /health
+      interval: 10s
+
+routes:
+  - match:
+      path_prefix: /
+    upstream: internal_api
+
+global:
+  shutdown_timeout: 30s
+
+# ============================================================
+# How to Generate Test Certificates
+# ============================================================
+#
+# 1. Generate CA key and certificate:
+#    openssl genrsa -out ca.key 4096
+#    openssl req -new -x509 -days 365 -key ca.key -out ca.crt \
+#      -subj "/CN=Prism Test CA"
+#
+# 2. Generate server key and CSR:
+#    openssl genrsa -out server.key 2048
+#    openssl req -new -key server.key -out server.csr \
+#      -subj "/CN=prism.example.com"
+#
+# 3. Sign server cert with CA:
+#    openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key \
+#      -CAcreateserial -out server.crt -days 365
+#
+# 4. Generate client key and CSR:
+#    openssl genrsa -out client.key 2048
+#    openssl req -new -key client.key -out client.csr \
+#      -subj "/CN=client-app"
+#
+# 5. Sign client cert with CA:
+#    openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key \
+#      -CAcreateserial -out client.crt -days 365
+#
+# 6. Test with curl:
+#    curl --cacert ca.crt \
+#         --cert client.crt \
+#         --key client.key \
+#         https://prism.example.com/api/test
+# ============================================================

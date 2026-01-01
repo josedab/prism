@@ -1,0 +1,448 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/your-org/prism/blob/main/prism-config-schema.json",
+  "title": "Prism Configuration",
+  "description": "Configuration schema for Prism reverse proxy",
+  "type": "object",
+  "required": ["listeners", "upstreams", "routes"],
+  "properties": {
+    "listeners": {
+      "type": "array",
+      "description": "Network listeners for incoming connections",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/listener"
+      }
+    },
+    "upstreams": {
+      "type": "object",
+      "description": "Backend server pools",
+      "additionalProperties": {
+        "$ref": "#/definitions/upstream"
+      }
+    },
+    "routes": {
+      "type": "array",
+      "description": "Routing rules",
+      "items": {
+        "$ref": "#/definitions/route"
+      }
+    },
+    "middlewares": {
+      "type": "object",
+      "description": "Named middleware configurations",
+      "additionalProperties": {
+        "$ref": "#/definitions/middleware"
+      }
+    },
+    "observability": {
+      "$ref": "#/definitions/observability"
+    },
+    "admin": {
+      "$ref": "#/definitions/admin"
+    }
+  },
+  "definitions": {
+    "listener": {
+      "type": "object",
+      "required": ["address"],
+      "properties": {
+        "address": {
+          "type": "string",
+          "description": "Bind address (e.g., '0.0.0.0:8080')",
+          "pattern": "^[^:]+:\\d+$"
+        },
+        "protocol": {
+          "type": "string",
+          "enum": ["http", "https", "h2", "h2c"],
+          "default": "http"
+        },
+        "tls": {
+          "$ref": "#/definitions/tls"
+        }
+      }
+    },
+    "tls": {
+      "type": "object",
+      "properties": {
+        "cert_file": {
+          "type": "string",
+          "description": "Path to TLS certificate file"
+        },
+        "key_file": {
+          "type": "string",
+          "description": "Path to TLS private key file"
+        },
+        "min_version": {
+          "type": "string",
+          "enum": ["1.2", "1.3"],
+          "default": "1.2"
+        },
+        "client_auth": {
+          "type": "string",
+          "enum": ["none", "optional", "required"],
+          "default": "none"
+        },
+        "client_ca_file": {
+          "type": "string",
+          "description": "Path to client CA certificate for mTLS"
+        }
+      }
+    },
+    "upstream": {
+      "type": "object",
+      "required": ["servers"],
+      "properties": {
+        "servers": {
+          "type": "array",
+          "description": "Backend servers",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/server"
+          }
+        },
+        "load_balancer": {
+          "type": "string",
+          "enum": ["round_robin", "least_connections", "weighted", "consistent_hash", "random"],
+          "default": "round_robin"
+        },
+        "health_check": {
+          "$ref": "#/definitions/health_check"
+        },
+        "circuit_breaker": {
+          "$ref": "#/definitions/circuit_breaker"
+        }
+      }
+    },
+    "server": {
+      "type": "object",
+      "required": ["address"],
+      "properties": {
+        "address": {
+          "type": "string",
+          "description": "Server address (e.g., '127.0.0.1:3000')"
+        },
+        "weight": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "max_connections": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "health_check": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "path": {
+          "type": "string",
+          "default": "/health"
+        },
+        "interval": {
+          "type": "string",
+          "description": "Check interval (e.g., '10s')",
+          "default": "10s"
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Request timeout (e.g., '5s')",
+          "default": "5s"
+        },
+        "healthy_threshold": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2
+        },
+        "unhealthy_threshold": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3
+        }
+      }
+    },
+    "circuit_breaker": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "failure_threshold": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 5
+        },
+        "success_threshold": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Time in open state before half-open",
+          "default": "30s"
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "properties": {
+        "match_config": {
+          "$ref": "#/definitions/match_config"
+        },
+        "upstream": {
+          "type": "string",
+          "description": "Target upstream name"
+        },
+        "handler": {
+          "$ref": "#/definitions/handler"
+        },
+        "middlewares": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rewrite": {
+          "$ref": "#/definitions/rewrite"
+        },
+        "priority": {
+          "type": "integer",
+          "default": 0
+        }
+      }
+    },
+    "match_config": {
+      "type": "object",
+      "properties": {
+        "path_prefix": {
+          "type": "string"
+        },
+        "path_exact": {
+          "type": "string"
+        },
+        "path_regex": {
+          "type": "string"
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "methods": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "handler": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["proxy", "redirect", "static", "health"]
+        },
+        "redirect_url": {
+          "type": "string"
+        },
+        "redirect_code": {
+          "type": "integer",
+          "enum": [301, 302, 307, 308]
+        }
+      }
+    },
+    "rewrite": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path rewrite pattern"
+        },
+        "strip_prefix": {
+          "type": "string"
+        },
+        "add_prefix": {
+          "type": "string"
+        }
+      }
+    },
+    "middleware": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "rate_limit",
+            "auth",
+            "cors",
+            "compression",
+            "cache",
+            "headers",
+            "request_id",
+            "timeout"
+          ]
+        },
+        "rate_limit": {
+          "$ref": "#/definitions/rate_limit_config"
+        },
+        "auth": {
+          "$ref": "#/definitions/auth_config"
+        },
+        "cors": {
+          "$ref": "#/definitions/cors_config"
+        },
+        "compression": {
+          "$ref": "#/definitions/compression_config"
+        }
+      }
+    },
+    "rate_limit_config": {
+      "type": "object",
+      "properties": {
+        "requests": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "window": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string",
+          "default": "${remote_addr}"
+        },
+        "burst": {
+          "type": "integer"
+        }
+      }
+    },
+    "auth_config": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["jwt", "api_key", "basic"]
+        },
+        "jwt": {
+          "type": "object",
+          "properties": {
+            "issuer": { "type": "string" },
+            "audience": { "type": "string" },
+            "jwks_url": { "type": "string" }
+          }
+        }
+      }
+    },
+    "cors_config": {
+      "type": "object",
+      "properties": {
+        "allow_origins": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "allow_methods": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "allow_headers": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "max_age": {
+          "type": "integer"
+        }
+      }
+    },
+    "compression_config": {
+      "type": "object",
+      "properties": {
+        "algorithms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["gzip", "br", "zstd"]
+          }
+        },
+        "min_size": {
+          "type": "integer",
+          "default": 1024
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "properties": {
+        "metrics": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "address": { "type": "string" },
+            "path": { "type": "string", "default": "/metrics" }
+          }
+        },
+        "logging": {
+          "type": "object",
+          "properties": {
+            "level": {
+              "type": "string",
+              "enum": ["trace", "debug", "info", "warn", "error"],
+              "default": "info"
+            },
+            "format": {
+              "type": "string",
+              "enum": ["json", "text", "pretty"],
+              "default": "json"
+            }
+          }
+        },
+        "tracing": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "exporter": {
+              "type": "string",
+              "enum": ["otlp", "jaeger", "zipkin"]
+            },
+            "endpoint": { "type": "string" }
+          }
+        }
+      }
+    },
+    "admin": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "address": {
+          "type": "string",
+          "default": "127.0.0.1:9090"
+        },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["none", "basic"] },
+            "username": { "type": "string" },
+            "password_hash": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

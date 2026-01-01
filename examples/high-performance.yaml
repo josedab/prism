@@ -1,0 +1,92 @@
+# High-Performance Configuration
+# Optimized for maximum throughput using io_uring and HTTP/3
+#
+# Run with: cargo run --features "io_uring,http3" -- --config examples/high-performance.yaml
+# Note: io_uring requires Linux 5.1+ kernel
+
+listeners:
+  # Standard HTTP/1.1 and HTTP/2
+  - address: "0.0.0.0:8080"
+    protocol: http
+    max_connections: 50000
+
+  # HTTPS with HTTP/2
+  - address: "0.0.0.0:8443"
+    protocol: https
+    max_connections: 50000
+    tls:
+      cert_file: "/etc/prism/certs/server.crt"
+      key_file: "/etc/prism/certs/server.key"
+      alpn_protocols: ["h2", "http/1.1"]
+
+upstreams:
+  fast-backend:
+    servers:
+      - address: "backend-1.internal:8080"
+        weight: 100
+      - address: "backend-2.internal:8080"
+        weight: 100
+      - address: "backend-3.internal:8080"
+        weight: 100
+    load_balancing: power_of_two_choices
+    health_check:
+      enabled: true
+      path: "/health"
+      interval: "5s"
+    pool:
+      max_connections: 500
+      min_connections: 50
+      idle_timeout: "120s"
+    connect_timeout: "1s"
+    request_timeout: "30s"
+
+routes:
+  - match:
+      path_prefix: "/"
+    upstream: fast-backend
+    middlewares:
+      - type: compression
+        algorithms: [gzip]
+        min_size: 1024
+        level: 1  # Fast compression
+
+observability:
+  metrics:
+    enabled: true
+    path: "/metrics"
+  access_log:
+    enabled: true
+    format: json
+    buffer_size: 65536  # Buffer logs for performance
+
+# HTTP/3 with QUIC
+# Requires feature: http3
+http3:
+  enabled: true
+  port: 443
+  max_idle_timeout_ms: 60000
+  initial_rtt_ms: 50
+  max_udp_payload_size: 1350
+  congestion_control: "bbr"  # BBR for better throughput
+  initial_window: 14720
+
+# io_uring Configuration (Linux 5.1+ only)
+# Requires feature: io_uring
+io_uring:
+  enabled: true
+  entries: 8192           # Large submission queue
+  submission_queue_poll: true  # Kernel polling for lower latency
+  io_poll: true           # Poll mode for NVMe
+  sq_poll_idle_ms: 2000   # Keep polling longer
+  max_registered_fds: 4096
+  buffer_pool_size: 512   # More pre-allocated buffers
+  buffer_size: 32768      # Larger buffers for throughput
+
+global:
+  worker_threads: 0       # Auto-detect CPU cores
+  max_connections: 200000
+  shutdown_timeout: "10s"
+  buffer_size: 65536      # 64KB buffers
+  tcp_nodelay: true       # Disable Nagle's algorithm
+  tcp_keepalive: true
+  so_reuseport: true      # Port sharing across workers

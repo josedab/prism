@@ -1,0 +1,121 @@
+# Microservices Routing Configuration
+# Host-based and path-based routing for microservices architecture
+
+listeners:
+  - address: "0.0.0.0:80"
+    protocol: http
+    max_connections: 20000
+
+upstreams:
+  # Frontend service
+  frontend:
+    servers:
+      - address: "frontend:3000"
+    load_balancing: round_robin
+
+  # API Gateway
+  api:
+    servers:
+      - address: "api-gateway:8080"
+    load_balancing: least_connections
+    health_check:
+      check_type: http
+      path: "/health"
+      interval: 5s
+
+  # Static assets CDN origin
+  static:
+    servers:
+      - address: "static-server:80"
+    load_balancing: round_robin
+    pool:
+      max_connections: 200
+      idle_timeout: 120s
+
+  # WebSocket service
+  websocket:
+    servers:
+      - address: "ws-server:8080"
+    load_balancing: ip_hash  # Sticky sessions for WebSocket
+
+  # Admin dashboard
+  admin_dashboard:
+    servers:
+      - address: "admin-ui:3000"
+
+routes:
+  # Static assets (high priority, cacheable)
+  - match:
+      path_prefix: "/static/"
+    upstream: static
+    middlewares:
+      - headers:
+          response_add:
+            Cache-Control: "public, max-age=31536000"
+    priority: 0
+
+  # WebSocket connections
+  - match:
+      path_prefix: "/ws/"
+    upstream: websocket
+    priority: 5
+
+  # API routes
+  - match:
+      path_prefix: "/api/"
+    upstream: api
+    middlewares:
+      - rate_limit:
+          requests_per_second: 100
+          burst: 200
+          key_by: ip
+      - headers:
+          request_add:
+            X-Request-Start: "t=${msec}"
+    priority: 10
+
+  # Admin dashboard (host-based)
+  - match:
+      host: "admin.example.com"
+      path_prefix: "/"
+    upstream: admin_dashboard
+    middlewares:
+      - rate_limit:
+          requests_per_second: 50
+          burst: 100
+          key_by: ip
+    priority: 20
+
+  # API subdomain
+  - match:
+      host: "api.example.com"
+      path_prefix: "/"
+    upstream: api
+    rewrite:
+      pattern: "^/"
+      replacement: "/api/"
+    priority: 20
+
+  # Wildcard subdomain routing
+  - match:
+      host: "*.example.com"
+      path_prefix: "/"
+    upstream: frontend
+    priority: 50
+
+  # Default frontend
+  - match:
+      path_prefix: "/"
+    upstream: frontend
+    priority: 100
+
+observability:
+  metrics:
+    enabled: true
+  access_log:
+    enabled: true
+    format: combined
+
+global:
+  http2: true
+  max_body_size: 52428800  # 50MB for file uploads

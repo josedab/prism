@@ -1,0 +1,84 @@
+# Response Caching Configuration Example
+# Demonstrates caching of upstream responses
+
+listeners:
+  - address: "0.0.0.0:8080"
+    protocol: http
+
+upstreams:
+  api:
+    servers:
+      - address: "api-server:8080"
+    health_check:
+      check_type: http
+      path: /health
+      interval: 10s
+
+  static:
+    servers:
+      - address: "static-server:80"
+
+routes:
+  # API routes - shorter cache duration
+  - match:
+      path_prefix: /api/
+    upstream: api
+    # Note: Cache behavior is typically controlled via Cache-Control headers
+    # from the upstream. The proxy respects these headers.
+
+  # Static content - longer cache duration
+  - match:
+      path_prefix: /static/
+    upstream: static
+
+  # Default route
+  - match:
+      path_prefix: /
+    upstream: api
+
+middleware:
+  # Enable compression for cached responses
+  - compression:
+      gzip: true
+      brotli: true
+      min_size: 1024
+
+global:
+  shutdown_timeout: 30s
+
+# ============================================================
+# Caching Behavior Notes
+# ============================================================
+#
+# The proxy respects standard HTTP caching headers:
+#
+# Cache-Control directives:
+#   - max-age=N: Cache for N seconds
+#   - s-maxage=N: Shared cache max age (takes precedence)
+#   - no-store: Never cache
+#   - no-cache: Validate before serving from cache
+#   - private: Don't cache in shared caches
+#   - public: Can be cached by any cache
+#
+# Conditional requests:
+#   - ETag + If-None-Match
+#   - Last-Modified + If-Modified-Since
+#   - Returns 304 Not Modified when content unchanged
+#
+# Example backend response headers for caching:
+#
+#   # Cache for 5 minutes
+#   Cache-Control: public, max-age=300
+#
+#   # Cache for 1 hour with ETag
+#   Cache-Control: public, max-age=3600
+#   ETag: "abc123"
+#
+#   # Don't cache sensitive data
+#   Cache-Control: no-store, private
+#
+#   # Validate every request (still cached, just validated)
+#   Cache-Control: no-cache
+#   ETag: "version-1"
+#
+# ============================================================

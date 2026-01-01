@@ -1,0 +1,172 @@
+# Edge Compute Configuration
+# Cloudflare Workers-style edge functions, WASM plugins, and GraphQL-aware routing
+#
+# Run with: cargo run --features edge-compute -- --config examples/edge-compute.yaml
+
+listeners:
+  - address: "0.0.0.0:8080"
+    protocol: http
+
+upstreams:
+  graphql-api:
+    servers:
+      - address: "graphql.internal:4000"
+    load_balancing: round_robin
+    health_check:
+      enabled: true
+      path: "/health"
+      interval: "15s"
+
+  rest-api:
+    servers:
+      - address: "api.internal:8080"
+    load_balancing: round_robin
+
+routes:
+  # GraphQL endpoint with smart routing
+  - match:
+      path: "/graphql"
+      methods: [POST]
+    upstream: graphql-api
+
+  # REST API
+  - match:
+      path_prefix: "/api/"
+    upstream: rest-api
+
+  # Edge function for A/B testing
+  - match:
+      path_prefix: "/experiment/"
+    handler:
+      type: edge_function
+      function: "ab-testing"
+
+  # Edge function for geolocation
+  - match:
+      path_prefix: "/geo/"
+    handler:
+      type: edge_function
+      function: "geo-router"
+
+observability:
+  metrics:
+    enabled: true
+    path: "/metrics"
+  access_log:
+    enabled: true
+    format: json
+
+# Edge Compute Runtime (Cloudflare Workers-style)
+# Requires feature: edge
+edge:
+  max_memory_mb: 128
+  execution_timeout_ms: 30000
+  max_concurrent: 100
+
+  # KV Namespaces for edge functions
+  kv_namespaces:
+    - name: "USER_SESSIONS"
+      persist: true
+    - name: "FEATURE_FLAGS"
+      persist: true
+    - name: "CACHE"
+      persist: false
+
+  # Edge functions
+  functions:
+    - name: "ab-testing"
+      path: "/functions/ab-testing.wasm"
+      env:
+        EXPERIMENT_ID: "exp-001"
+        VARIANT_RATIO: "0.5"
+      bindings:
+        - type: kv
+          name: "FEATURE_FLAGS"
+
+    - name: "geo-router"
+      path: "/functions/geo-router.wasm"
+      env:
+        DEFAULT_REGION: "us-west"
+      bindings:
+        - type: kv
+          name: "USER_SESSIONS"
+
+    - name: "auth-transform"
+      path: "/functions/auth-transform.wasm"
+      bindings:
+        - type: secret
+          name: "JWT_SECRET"
+
+# WASM Plugin System
+# Requires feature: plugins
+plugins:
+  plugin_dir: "./plugins"
+  max_memory_pages: 256
+  enable_wasi: true
+
+  # Loaded plugins
+  plugins:
+    - name: "request-validator"
+      path: "request-validator.wasm"
+      phase: "request"
+      priority: 100
+      config:
+        max_body_size: 1048576
+        allowed_content_types:
+          - "application/json"
+          - "application/graphql"
+
+    - name: "response-transformer"
+      path: "response-transformer.wasm"
+      phase: "response"
+      priority: 50
+      config:
+        strip_headers:
+          - "X-Internal-*"
+        add_headers:
+          X-Powered-By: "Prism"
+
+    - name: "rate-limiter-custom"
+      path: "rate-limiter.wasm"
+      phase: "request"
+      priority: 200
+      config:
+        window_size_secs: 60
+        max_requests: 100
+
+# GraphQL-Aware Routing
+# Requires feature: graphql
+graphql:
+  enabled: true
+  introspection_enabled: false
+  max_depth: 10
+  max_complexity: 1000
+
+  # Operation-based routing
+  operation_routes:
+    - operation: "GetUser"
+      type: "query"
+      upstream: "user-service"
+      cache_ttl_secs: 300
+
+    - operation: "CreateOrder"
+      type: "mutation"
+      upstream: "order-service"
+      rate_limit:
+        requests_per_minute: 100
+
+    - operation: "OrderUpdates"
+      type: "subscription"
+      upstream: "realtime-service"
+
+  # Field-level authorization
+  field_auth:
+    - field: "User.email"
+      requires_role: "admin"
+    - field: "User.creditCard"
+      requires_role: "billing"
+
+global:
+  worker_threads: 4
+  max_connections: 50000
+  shutdown_timeout: "15s"
