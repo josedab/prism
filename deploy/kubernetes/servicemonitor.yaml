@@ -1,0 +1,20 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: prism
+  namespace: prism
+  labels:
+    app.kubernetes.io/name: prism
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prism
+  namespaceSelector:
+    matchNames:
+      - prism
+  endpoints:
+    - port: admin
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
