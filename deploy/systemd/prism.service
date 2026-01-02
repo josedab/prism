@@ -1,0 +1,71 @@
+[Unit]
+Description=Prism High-Performance Reverse Proxy
+Documentation=https://github.com/your-org/prism
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=500
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=prism
+Group=prism
+
+# Binary location
+ExecStart=/usr/local/bin/prism --config /etc/prism/prism.yaml
+
+# Graceful shutdown
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Restart policy
+Restart=on-failure
+RestartSec=5s
+
+# Environment
+Environment="RUST_LOG=info"
+Environment="RUST_BACKTRACE=1"
+EnvironmentFile=-/etc/prism/prism.env
+
+# Working directory
+WorkingDirectory=/var/lib/prism
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=prism
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+
+# Read-only paths
+ReadOnlyPaths=/etc/prism
+
+# Read-write paths
+ReadWritePaths=/var/lib/prism /var/log/prism
+
+# Capabilities
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target

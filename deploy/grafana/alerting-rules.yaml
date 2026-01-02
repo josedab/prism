@@ -1,0 +1,139 @@
+# Prometheus Alerting Rules for Prism
+groups:
+  - name: prism.rules
+    rules:
+      # High error rate
+      - alert: PrismHighErrorRate
+        expr: |
+          sum(rate(prism_requests_total{status=~"5.."}[5m]))
+          / sum(rate(prism_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate in Prism"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+
+      # High latency
+      - alert: PrismHighLatency
+        expr: |
+          histogram_quantile(0.99, sum(rate(prism_request_duration_seconds_bucket[5m])) by (le)) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High P99 latency in Prism"
+          description: "P99 latency is {{ $value | humanizeDuration }} (threshold: 1s)"
+
+      # Very high latency
+      - alert: PrismVeryHighLatency
+        expr: |
+          histogram_quantile(0.99, sum(rate(prism_request_duration_seconds_bucket[5m])) by (le)) > 5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Very high P99 latency in Prism"
+          description: "P99 latency is {{ $value | humanizeDuration }} (threshold: 5s)"
+
+      # Upstream unhealthy
+      - alert: PrismUpstreamUnhealthy
+        expr: prism_upstream_healthy == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prism upstream server unhealthy"
+          description: "Upstream {{ $labels.upstream }} server {{ $labels.server }} is unhealthy"
+
+      # All upstreams down
+      - alert: PrismAllUpstreamsDown
+        expr: |
+          sum(prism_upstream_healthy) by (upstream) == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "All Prism upstream servers are down"
+          description: "All servers in upstream {{ $labels.upstream }} are unhealthy"
+
+      # High connection count
+      - alert: PrismHighConnectionCount
+        expr: prism_active_connections > 10000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High active connection count in Prism"
+          description: "Active connections: {{ $value }} (threshold: 10000)"
+
+      # Circuit breaker open
+      - alert: PrismCircuitBreakerOpen
+        expr: prism_circuit_breaker_state == 1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prism circuit breaker is open"
+          description: "Circuit breaker for {{ $labels.upstream }} is open"
+
+      # Rate limiting triggered
+      - alert: PrismRateLimitingActive
+        expr: |
+          sum(rate(prism_rate_limit_rejected_total[5m])) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate limiting activity"
+          description: "Rate limiting rejecting {{ $value | humanize }} requests/sec"
+
+      # Memory usage high
+      - alert: PrismHighMemoryUsage
+        expr: |
+          process_resident_memory_bytes / 1024 / 1024 > 400
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage in Prism"
+          description: "Memory usage is {{ $value | humanize }}MB (threshold: 400MB)"
+
+      # CPU usage high
+      - alert: PrismHighCPUUsage
+        expr: rate(process_cpu_seconds_total[5m]) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage in Prism"
+          description: "CPU usage is {{ $value | humanizePercentage }} (threshold: 80%)"
+
+      # No requests (possible issue)
+      - alert: PrismNoTraffic
+        expr: sum(rate(prism_requests_total[5m])) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No traffic to Prism"
+          description: "Prism has not received any requests in the last 10 minutes"
+
+      # TLS certificate expiry
+      - alert: PrismTLSCertificateExpiringSoon
+        expr: prism_tls_certificate_expiry_seconds < 86400 * 7
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate expiring soon"
+          description: "TLS certificate expires in {{ $value | humanizeDuration }}"
+
+      - alert: PrismTLSCertificateExpired
+        expr: prism_tls_certificate_expiry_seconds < 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "TLS certificate has expired"
+          description: "TLS certificate for {{ $labels.domain }} has expired"
