@@ -1,0 +1,102 @@
+# cargo-deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+#
+# Run: cargo deny check
+
+[graph]
+# Targets to check
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+all-features = true
+
+[advisories]
+# Security advisory database
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "deny"
+notice = "warn"
+
+# Ignore specific advisories (with reason)
+ignore = [
+    # Example: "RUSTSEC-2020-0001", # reason for ignoring
+]
+
+[licenses]
+# License compliance
+unlicensed = "deny"
+confidence-threshold = 0.8
+
+# Allowed licenses
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "Unicode-DFS-2016",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+
+# Copyleft licenses (require careful review)
+copyleft = "warn"
+
+# Exceptions for specific crates
+exceptions = [
+    # Example: { name = "some-crate", allow = ["GPL-3.0"] }
+]
+
+[licenses.private]
+# Private/internal crates
+ignore = false
+registries = []
+
+[bans]
+# Crate bans and duplicate detection
+multiple-versions = "warn"
+wildcards = "allow"  # Allow wildcard dependencies
+highlight = "all"
+
+# Deny specific crates
+deny = [
+    # Known problematic crates
+    # { name = "openssl" }, # Prefer rustls
+]
+
+# Allow specific crates
+allow = []
+
+# Skip duplicate detection for these crates
+skip = [
+    # Common crates with version conflicts
+    # { name = "syn", version = "*" },
+]
+
+# Tree-skip: skip entire dependency trees
+skip-tree = []
+
+[sources]
+# Source restrictions
+unknown-registry = "deny"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# Allowed Git sources
+allow-git = []
+
+[sources.allow-org]
+# Allowed GitHub organizations
+github = [
+    # "your-org",
+]
