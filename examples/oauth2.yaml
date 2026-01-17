@@ -1,0 +1,183 @@
+# OAuth2/OIDC Authentication Configuration Example
+#
+# This example demonstrates how to configure Prism with OAuth2/OIDC authentication.
+# Supports: Google, GitHub, Microsoft Azure AD, Auth0, Okta, Keycloak, and custom providers.
+
+listeners:
+  - address: "0.0.0.0:8080"
+    protocol: http
+
+upstreams:
+  api_backend:
+    servers:
+      - address: "127.0.0.1:3000"
+
+# Routes with OAuth2 protection
+routes:
+  # Protected route - requires authentication
+  - match:
+      path_prefix: "/api"
+    upstream: api_backend
+    middlewares:
+      - type: oauth2
+        oauth2:
+          # Provider options: google, github, microsoft, auth0, okta, keycloak, custom
+          provider: google
+          client_id: "your-client-id.apps.googleusercontent.com"
+          client_secret: "your-client-secret"
+
+          # Scopes to request
+          scopes:
+            - openid
+            - profile
+            - email
+
+          # Redirect URI for callback
+          redirect_uri: "https://your-app.example.com/oauth2/callback"
+
+          # OAuth2 paths
+          callback_path: /oauth2/callback
+          login_path: /oauth2/login
+          logout_path: /oauth2/logout
+
+          # Session configuration
+          cookie_name: prism_session
+          cookie_secure: true
+          cookie_http_only: true
+          cookie_same_site: Lax
+          session_timeout: 24h
+
+          # Pass user info as headers to upstream
+          pass_user_headers: true
+          header_prefix: "X-User-"
+
+          # Paths to exclude from authentication
+          exclude_paths:
+            - /health
+            - /metrics
+            - /api/public/*
+
+          # Use PKCE for additional security
+          use_pkce: true
+
+  # Public route - no authentication
+  - match:
+      path_prefix: "/health"
+    upstream: api_backend
+
+---
+# GitHub OAuth2 Example
+#
+# middlewares:
+#   - type: oauth2
+#     oauth2:
+#       provider: github
+#       client_id: "your-github-client-id"
+#       client_secret: "your-github-client-secret"
+#       scopes:
+#         - read:user
+#         - user:email
+#       redirect_uri: "https://your-app.example.com/oauth2/callback"
+
+---
+# Microsoft Azure AD Example
+#
+# middlewares:
+#   - type: oauth2
+#     oauth2:
+#       provider: microsoft
+#       client_id: "your-azure-client-id"
+#       client_secret: "your-azure-client-secret"
+#       # For single-tenant, use your tenant ID
+#       # For multi-tenant, use "common"
+#       authorization_endpoint: "https://login.microsoftonline.com/your-tenant-id/oauth2/v2.0/authorize"
+#       token_endpoint: "https://login.microsoftonline.com/your-tenant-id/oauth2/v2.0/token"
+#       jwks_url: "https://login.microsoftonline.com/your-tenant-id/discovery/v2.0/keys"
+#       scopes:
+#         - openid
+#         - profile
+#         - email
+
+---
+# Auth0 Example
+#
+# middlewares:
+#   - type: oauth2
+#     oauth2:
+#       provider: auth0
+#       client_id: "your-auth0-client-id"
+#       client_secret: "your-auth0-client-secret"
+#       auth0_domain: "your-tenant.auth0.com"
+#       scopes:
+#         - openid
+#         - profile
+#         - email
+
+---
+# Okta Example
+#
+# middlewares:
+#   - type: oauth2
+#     oauth2:
+#       provider: okta
+#       client_id: "your-okta-client-id"
+#       client_secret: "your-okta-client-secret"
+#       okta_org_url: "https://dev-123456.okta.com"
+#       scopes:
+#         - openid
+#         - profile
+#         - email
+
+---
+# Keycloak Example
+#
+# middlewares:
+#   - type: oauth2
+#     oauth2:
+#       provider: keycloak
+#       client_id: "your-keycloak-client-id"
+#       client_secret: "your-keycloak-client-secret"
+#       keycloak_url: "https://keycloak.example.com"
+#       keycloak_realm: "your-realm"
+#       scopes:
+#         - openid
+#         - profile
+#         - email
+
+---
+# Custom OIDC Provider Example
+#
+# middlewares:
+#   - type: oauth2
+#     oauth2:
+#       provider: custom
+#       client_id: "your-client-id"
+#       client_secret: "your-client-secret"
+#
+#       # OIDC Discovery endpoints
+#       authorization_endpoint: "https://idp.example.com/authorize"
+#       token_endpoint: "https://idp.example.com/token"
+#       userinfo_endpoint: "https://idp.example.com/userinfo"
+#       jwks_url: "https://idp.example.com/.well-known/jwks.json"
+#       introspection_endpoint: "https://idp.example.com/introspect"
+#       revocation_endpoint: "https://idp.example.com/revoke"
+#       end_session_endpoint: "https://idp.example.com/logout"
+#
+#       # Token validation
+#       issuer: "https://idp.example.com"
+#       required_audience: "your-audience"
+#
+#       scopes:
+#         - openid
+#         - profile
+#         - email
+#         - custom_scope
+
+# Observability
+observability:
+  metrics:
+    enabled: true
+    address: "0.0.0.0:9090"
+  access_log:
+    enabled: true
+    format: json

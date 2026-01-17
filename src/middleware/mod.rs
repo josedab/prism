@@ -19,6 +19,7 @@ mod cors;
 mod headers;
 mod hedging;
 mod ip_filter;
+mod oauth;
 mod rate_limit;
 mod rate_limit_distributed;
 mod request_id;
@@ -27,6 +28,7 @@ mod rewrite;
 mod timeout;
 
 pub use auth::{AuthMiddleware, AuthMiddlewareConfig, AuthResult, Jwk, Jwks, JwtClaims};
+pub use oauth::{OAuth2Config, OAuth2Middleware, OAuth2Provider, SessionData, TokenResponse, UserInfo};
 pub use body_limit::{
     BodyLimitConfig, BodyLimitExceeded, BodyLimitMiddleware, LimitedBody, LimitedBodyError,
     DEFAULT_MAX_BODY_SIZE,
