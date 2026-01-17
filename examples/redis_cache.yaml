@@ -1,0 +1,185 @@
+# Redis Cache Configuration Example
+#
+# This example demonstrates how to configure distributed response caching
+# with Redis. Requires the 'distributed-rate-limit' feature to be enabled.
+#
+# Build: cargo build --features distributed-rate-limit
+# Run: prism --config examples/redis_cache.yaml
+
+listeners:
+  - address: "0.0.0.0:8080"
+    protocol: http
+
+upstreams:
+  api_backend:
+    servers:
+      - address: "127.0.0.1:3000"
+    health_check:
+      enabled: true
+      interval: 10s
+      path: /health
+
+routes:
+  # Cached API route
+  - match:
+      path_prefix: "/api/v1"
+    upstream: api_backend
+    middlewares:
+      - type: redis_cache
+        redis_cache:
+          # Redis connection URL
+          redis_url: "redis://localhost:6379"
+
+          # Key prefix for cache entries
+          prefix: "prism:cache:"
+
+          # Default TTL for cached responses (5 minutes)
+          default_ttl: 300
+
+          # Maximum TTL even if Cache-Control specifies higher (1 hour)
+          max_ttl: 3600
+
+          # Minimum TTL to enforce (10 seconds)
+          min_ttl: 10
+
+          # Maximum size per cache entry (1 MB)
+          max_entry_size: 1048576
+
+          # Enable gzip compression for cached content
+          compress: true
+
+          # Minimum size before applying compression (1 KB)
+          compress_min_size: 1024
+
+          # Stale-while-revalidate: serve stale content while refreshing
+          stale_while_revalidate: 60
+
+          # Stale-if-error: serve stale content if upstream errors
+          stale_if_error: 300
+
+          # Respect Vary header for cache key generation
+          respect_vary: true
+
+          # Cache tags for invalidation (optional)
+          # Tags can be used to invalidate groups of cache entries
+          cache_tags:
+            - api
+            - v1
+
+          # HTTP methods to cache (typically only GET)
+          cacheable_methods:
+            - GET
+            - HEAD
+
+          # Status codes that are cacheable
+          cacheable_status:
+            - 200
+            - 203
+            - 204
+            - 206
+            - 300
+            - 301
+            - 308
+
+  # Uncached route for dynamic content
+  - match:
+      path_prefix: "/api/v1/realtime"
+    upstream: api_backend
+    # No cache middleware - requests go directly to upstream
+
+  # Static content with aggressive caching
+  - match:
+      path_prefix: "/static"
+    upstream: api_backend
+    middlewares:
+      - type: redis_cache
+        redis_cache:
+          redis_url: "redis://localhost:6379"
+          prefix: "prism:static:"
+          default_ttl: 86400  # 24 hours for static content
+          max_ttl: 604800     # 1 week max
+          compress: true
+          compress_min_size: 512
+          cache_tags:
+            - static
+            - assets
+
+# Observability
+observability:
+  metrics:
+    enabled: true
+    address: "0.0.0.0:9090"
+  access_log:
+    enabled: true
+    format: json
+
+---
+# Redis Cluster Configuration Example
+#
+# For Redis Cluster deployments, use the cluster URL format:
+#
+# middlewares:
+#   - type: redis_cache
+#     redis_cache:
+#       redis_url: "redis+cluster://node1:6379,node2:6379,node3:6379"
+#       prefix: "prism:cache:"
+#       default_ttl: 300
+
+---
+# Redis Sentinel Configuration Example
+#
+# For Redis Sentinel high-availability deployments:
+#
+# middlewares:
+#   - type: redis_cache
+#     redis_cache:
+#       redis_url: "redis+sentinel://sentinel1:26379,sentinel2:26379/mymaster"
+#       prefix: "prism:cache:"
+#       default_ttl: 300
+
+---
+# Redis with Authentication Example
+#
+# For password-protected Redis:
+#
+# middlewares:
+#   - type: redis_cache
+#     redis_cache:
+#       redis_url: "redis://:password@localhost:6379"
+#       prefix: "prism:cache:"
+#       default_ttl: 300
+
+---
+# Redis TLS Configuration Example
+#
+# For TLS-encrypted Redis connections:
+#
+# middlewares:
+#   - type: redis_cache
+#     redis_cache:
+#       redis_url: "rediss://localhost:6380"  # Note: rediss:// for TLS
+#       prefix: "prism:cache:"
+#       default_ttl: 300
+
+---
+# Conditional Request Handling
+#
+# The Redis cache automatically handles conditional requests:
+# - ETag: Stored and used for If-None-Match validation
+# - Last-Modified: Stored and used for If-Modified-Since validation
+#
+# When a cached response matches conditions, returns 304 Not Modified
+# to save bandwidth.
+
+---
+# Cache Invalidation via Tags
+#
+# Cache entries can be tagged for group invalidation.
+# Use the admin API to invalidate by tag:
+#
+# POST /admin/cache/invalidate
+# Content-Type: application/json
+# {"tags": ["api", "v1"]}
+#
+# Or invalidate a specific key:
+# DELETE /admin/cache/key/{cache_key}

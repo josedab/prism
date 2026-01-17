@@ -11,6 +11,7 @@
 mod auth;
 mod body_limit;
 mod cache;
+mod cache_redis;
 mod chain;
 mod chaos;
 mod compression;
@@ -34,6 +35,9 @@ pub use body_limit::{
     DEFAULT_MAX_BODY_SIZE,
 };
 pub use cache::{CacheConfig, CacheEntry, CacheMiddleware, CacheStats, ResponseCache};
+pub use cache_redis::{
+    RedisCacheConfig, RedisCacheEntry, RedisCacheMiddleware, RedisCacheStats, RedisCacheStatsSnapshot,
+};
 pub use chain::*;
 pub use chaos::{
     AbortConfig, AbortTiming, ChaosConfig, ChaosMiddleware, ChaosStats, CorruptionConfig,
