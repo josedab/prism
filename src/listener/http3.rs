@@ -615,11 +615,30 @@ pub struct Http3StatsSnapshot {
     pub handshake_failures: u64,
 }
 
-/// HTTP/3 listener (placeholder for actual QUIC implementation)
+/// HTTP/3 listener
 pub struct Http3Listener {
     config: Http3Config,
     stats: Arc<Http3Stats>,
     connections: RwLock<HashMap<String, Arc<QuicConnectionInfo>>>,
+    /// Request handler (set when integrating with server)
+    #[cfg(feature = "http3")]
+    request_handler: RwLock<Option<Arc<dyn H3RequestHandler + Send + Sync>>>,
+}
+
+/// Trait for handling HTTP/3 requests
+#[cfg(feature = "http3")]
+pub trait H3RequestHandler: Send + Sync {
+    /// Handle an HTTP/3 request and return a response
+    fn handle(
+        &self,
+        request: http::Request<bytes::Bytes>,
+        remote_addr: std::net::SocketAddr,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = http::Response<http_body_util::Full<bytes::Bytes>>>
+                + Send,
+        >,
+    >;
 }
 
 impl Http3Listener {
@@ -629,7 +648,21 @@ impl Http3Listener {
             config,
             stats: Arc::new(Http3Stats::new()),
             connections: RwLock::new(HashMap::new()),
+            #[cfg(feature = "http3")]
+            request_handler: RwLock::new(None),
         }
+    }
+
+    /// Set the request handler for processing HTTP/3 requests
+    #[cfg(feature = "http3")]
+    pub fn set_request_handler(&self, handler: Arc<dyn H3RequestHandler + Send + Sync>) {
+        *self.request_handler.write() = Some(handler);
+    }
+
+    /// Get the request handler
+    #[cfg(feature = "http3")]
+    pub fn request_handler(&self) -> Option<Arc<dyn H3RequestHandler + Send + Sync>> {
+        self.request_handler.read().clone()
     }
 
     /// Get the configuration
@@ -708,6 +741,496 @@ pub fn accepts_h3_upgrade(headers: &HashMap<String, String>) -> bool {
         false
     })
 }
+
+// ============================================
+// HTTP/3 QUIC Implementation (Feature-Gated)
+// ============================================
+
+#[cfg(feature = "http3")]
+#[allow(dead_code)] // Internal implementation with helper methods for future use
+mod quic_impl {
+    use super::*;
+    use crate::error::{PrismError, Result};
+    use bytes::{Buf, Bytes};
+    use http::{Request, Response};
+    use http_body_util::Full;
+    use quinn::{crypto::rustls::QuicServerConfig, Endpoint, Incoming, ServerConfig};
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    use std::fs::File;
+    use std::io::BufReader;
+    use std::net::SocketAddr;
+    use tokio::sync::broadcast;
+    use tracing::{debug, error, info, warn};
+
+    /// Build rustls ServerConfig suitable for QUIC
+    fn build_quic_server_crypto(
+        cert_path: &std::path::Path,
+        key_path: &std::path::Path,
+    ) -> Result<rustls::ServerConfig> {
+        // Load certificates
+        let cert_file = File::open(cert_path).map_err(|e| {
+            PrismError::Config(format!("Failed to open certificate file: {}", e))
+        })?;
+        let mut cert_reader = BufReader::new(cert_file);
+        let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| PrismError::Config(format!("Failed to parse certificates: {}", e)))?;
+
+        if certs.is_empty() {
+            return Err(PrismError::Config(
+                "No certificates found in certificate file".to_string(),
+            ));
+        }
+
+        // Load private key
+        let key_file = File::open(key_path)
+            .map_err(|e| PrismError::Config(format!("Failed to open key file: {}", e)))?;
+        let mut key_reader = BufReader::new(key_file);
+        let key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut key_reader)
+            .map_err(|e| PrismError::Config(format!("Failed to parse private key: {}", e)))?
+            .ok_or_else(|| PrismError::Config("No private key found in key file".to_string()))?;
+
+        // Build rustls config with QUIC-compatible settings
+        let mut server_crypto = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .map_err(|e| PrismError::Config(format!("TLS configuration error: {}", e)))?;
+
+        // Enable ALPN for HTTP/3
+        server_crypto.alpn_protocols = vec![b"h3".to_vec()];
+
+        Ok(server_crypto)
+    }
+
+    impl Http3Listener {
+        /// Start listening for HTTP/3 connections
+        pub async fn listen(
+            &self,
+            mut shutdown_rx: broadcast::Receiver<()>,
+        ) -> Result<()> {
+            let addr: SocketAddr = self
+                .config
+                .address
+                .parse()
+                .map_err(|e| PrismError::Config(format!("Invalid address: {}", e)))?;
+
+            // Load TLS config
+            let cert_path = self.config.cert_path.as_ref().ok_or_else(|| {
+                PrismError::Config("cert_path required for HTTP/3".to_string())
+            })?;
+            let key_path = self.config.key_path.as_ref().ok_or_else(|| {
+                PrismError::Config("key_path required for HTTP/3".to_string())
+            })?;
+
+            // Build rustls ServerConfig with QUIC-compatible settings
+            let server_crypto = build_quic_server_crypto(cert_path, key_path)?;
+
+            // Create QUIC server config
+            let quic_server_config = QuicServerConfig::try_from(server_crypto)
+                .map_err(|e| PrismError::Config(format!("QUIC config error: {}", e)))?;
+
+            let mut server_config = ServerConfig::with_crypto(Arc::new(quic_server_config));
+
+            // Configure transport parameters
+            let mut transport_config = quinn::TransportConfig::default();
+            transport_config.max_concurrent_bidi_streams(
+                self.config.max_concurrent_streams.into(),
+            );
+            if let Ok(timeout) = Duration::from_secs(self.config.idle_timeout_secs).try_into() {
+                transport_config.max_idle_timeout(Some(timeout));
+            }
+
+            // Configure receive windows
+            transport_config.receive_window(self.config.connection_receive_window.into());
+            transport_config.stream_receive_window(self.config.stream_receive_window.into());
+
+            // Configure keep-alive
+            if self.config.keepalive_interval_secs > 0 {
+                transport_config.keep_alive_interval(Some(Duration::from_secs(
+                    self.config.keepalive_interval_secs,
+                )));
+            }
+
+            server_config.transport_config(Arc::new(transport_config));
+
+            // Bind UDP socket
+            let endpoint = Endpoint::server(server_config, addr)
+                .map_err(|e| PrismError::Io(e))?;
+
+            info!("HTTP/3 listener bound to {} (UDP)", addr);
+
+            // Accept connections loop
+            loop {
+                tokio::select! {
+                    incoming = endpoint.accept() => {
+                        match incoming {
+                            Some(incoming) => {
+                                let listener = self.clone_for_connection();
+                                tokio::spawn(async move {
+                                    if let Err(e) = listener.accept_connection(incoming).await {
+                                        debug!("HTTP/3 connection error: {}", e);
+                                    }
+                                });
+                            }
+                            None => {
+                                info!("HTTP/3 endpoint closed");
+                                break;
+                            }
+                        }
+                    }
+                    _ = shutdown_rx.recv() => {
+                        info!("HTTP/3 listener shutting down");
+                        endpoint.close(0u32.into(), b"server shutting down");
+                        break;
+                    }
+                }
+            }
+
+            // Wait for endpoint to drain
+            endpoint.wait_idle().await;
+            info!("HTTP/3 endpoint drained");
+
+            Ok(())
+        }
+
+        /// Accept a single QUIC connection
+        async fn accept_connection(&self, incoming: Incoming) -> Result<()> {
+            // Accept the QUIC connection
+            let connection = incoming.await.map_err(|e| {
+                self.stats.record_handshake_failure();
+                PrismError::Connection(format!("QUIC handshake failed: {}", e))
+            })?;
+
+            let conn_id = connection.stable_id().to_string();
+            let remote_addr = connection.remote_address();
+            let local_addr = connection
+                .local_ip()
+                .map(|ip| SocketAddr::new(ip, 0))
+                .unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
+
+            // Note: In newer quinn versions, 0-RTT detection is done differently
+            // For now, we default to false - proper detection would require checking
+            // if the connection was resumed from a previous session
+            let is_0rtt = false;
+
+            debug!(
+                conn_id = %conn_id,
+                remote = %remote_addr,
+                is_0rtt = is_0rtt,
+                "HTTP/3 connection established"
+            );
+
+            // Track connection
+            let mut info = QuicConnectionInfo::new(conn_id.clone(), remote_addr, local_addr);
+            info.state = QuicConnectionState::Connected;
+            info.is_0rtt = is_0rtt;
+            self.add_connection(info);
+            self.stats.record_connection(is_0rtt);
+
+            // Create HTTP/3 connection
+            let h3_conn = match h3::server::Connection::new(h3_quinn::Connection::new(connection))
+                .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    error!("HTTP/3 connection setup failed: {}", e);
+                    self.remove_connection(&conn_id);
+                    return Err(PrismError::Connection(format!(
+                        "HTTP/3 setup failed: {}",
+                        e
+                    )));
+                }
+            };
+
+            // Handle HTTP/3 requests
+            self.handle_h3_connection(h3_conn, conn_id.clone()).await;
+
+            self.remove_connection(&conn_id);
+            Ok(())
+        }
+
+        /// Handle HTTP/3 requests on a connection (simplified for h3_quinn)
+        async fn handle_h3_connection(
+            &self,
+            mut conn: h3::server::Connection<h3_quinn::Connection, Bytes>,
+            conn_id: String,
+        ) {
+            loop {
+                match conn.accept().await {
+                    Ok(Some(resolver)) => {
+                        // In h3 0.0.8, RequestResolver implements Future
+                        match resolver.resolve_request().await {
+                            Ok((request, stream)) => {
+                                self.stats.record_request();
+                                debug!(
+                                    conn_id = %conn_id,
+                                    method = %request.method(),
+                                    uri = %request.uri(),
+                                    "HTTP/3 request received"
+                                );
+
+                                // Spawn task to handle request
+                                let stats = self.stats.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) = handle_h3_request_simple(request, stream).await
+                                    {
+                                        debug!("HTTP/3 request error: {:?}", e);
+                                    }
+                                    stats.record_bytes(0, 0);
+                                });
+                            }
+                            Err(e) => {
+                                debug!(conn_id = %conn_id, error = ?e, "Failed to resolve request");
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        debug!(conn_id = %conn_id, "HTTP/3 connection closed gracefully");
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(conn_id = %conn_id, error = ?e, "HTTP/3 connection error");
+                        break;
+                    }
+                }
+            }
+        }
+
+        /// Clone listener state for spawned connection handlers
+        fn clone_for_connection(&self) -> Http3ListenerHandle {
+            Http3ListenerHandle {
+                config: self.config.clone(),
+                stats: self.stats.clone(),
+                connections: self.connections.read().clone(),
+                connections_lock: Arc::new(RwLock::new(HashMap::new())),
+                request_handler: self.request_handler.read().clone(),
+            }
+        }
+    }
+
+    /// Handle for connection processing (avoids lifetime issues with RwLock)
+    struct Http3ListenerHandle {
+        config: Http3Config,
+        stats: Arc<Http3Stats>,
+        connections: HashMap<String, Arc<QuicConnectionInfo>>,
+        connections_lock: Arc<RwLock<HashMap<String, Arc<QuicConnectionInfo>>>>,
+        request_handler: Option<Arc<dyn super::H3RequestHandler + Send + Sync>>,
+    }
+
+    impl Http3ListenerHandle {
+        async fn accept_connection(&self, incoming: Incoming) -> Result<()> {
+            // Accept the QUIC connection
+            let connection = incoming.await.map_err(|e| {
+                self.stats.record_handshake_failure();
+                PrismError::Connection(format!("QUIC handshake failed: {}", e))
+            })?;
+
+            let conn_id = connection.stable_id().to_string();
+            let remote_addr = connection.remote_address();
+            let local_addr = connection
+                .local_ip()
+                .map(|ip| SocketAddr::new(ip, 0))
+                .unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
+
+            // Note: In newer quinn versions, 0-RTT detection is done differently
+            // For now, we default to false - proper detection would require checking
+            // if the connection was resumed from a previous session
+            let is_0rtt = false;
+
+            debug!(
+                conn_id = %conn_id,
+                remote = %remote_addr,
+                is_0rtt = is_0rtt,
+                "HTTP/3 connection established"
+            );
+
+            // Track connection
+            let mut info = QuicConnectionInfo::new(conn_id.clone(), remote_addr, local_addr);
+            info.state = QuicConnectionState::Connected;
+            info.is_0rtt = is_0rtt;
+            self.add_connection(info);
+            self.stats.record_connection(is_0rtt);
+
+            // Create HTTP/3 connection
+            let h3_conn = match h3::server::Connection::new(h3_quinn::Connection::new(connection))
+                .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    error!("HTTP/3 connection setup failed: {}", e);
+                    self.remove_connection(&conn_id);
+                    return Err(PrismError::Connection(format!(
+                        "HTTP/3 setup failed: {}",
+                        e
+                    )));
+                }
+            };
+
+            // Handle HTTP/3 requests
+            self.handle_h3_connection(h3_conn, conn_id.clone(), remote_addr)
+                .await;
+
+            self.remove_connection(&conn_id);
+            Ok(())
+        }
+
+        fn add_connection(&self, info: QuicConnectionInfo) {
+            self.connections_lock
+                .write()
+                .insert(info.connection_id.clone(), Arc::new(info));
+        }
+
+        fn remove_connection(&self, id: &str) {
+            if self.connections_lock.write().remove(id).is_some() {
+                self.stats.record_disconnect();
+            }
+        }
+
+        async fn handle_h3_connection(
+            &self,
+            mut conn: h3::server::Connection<h3_quinn::Connection, Bytes>,
+            conn_id: String,
+            remote_addr: SocketAddr,
+        ) {
+            loop {
+                match conn.accept().await {
+                    Ok(Some(resolver)) => {
+                        // In h3 0.0.8, RequestResolver implements Future
+                        match resolver.resolve_request().await {
+                            Ok((request, stream)) => {
+                                self.stats.record_request();
+                                debug!(
+                                    conn_id = %conn_id,
+                                    method = %request.method(),
+                                    uri = %request.uri(),
+                                    "HTTP/3 request received"
+                                );
+
+                                // Spawn task to handle request
+                                let stats = self.stats.clone();
+                                let handler = self.request_handler.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) =
+                                        handle_h3_request_with_handler(request, stream, handler, remote_addr).await
+                                    {
+                                        debug!("HTTP/3 request error: {:?}", e);
+                                    }
+                                    stats.record_bytes(0, 0);
+                                });
+                            }
+                            Err(e) => {
+                                debug!(conn_id = %conn_id, error = ?e, "Failed to resolve request");
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        debug!(conn_id = %conn_id, "HTTP/3 connection closed gracefully");
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(conn_id = %conn_id, error = ?e, "HTTP/3 connection error");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Simple HTTP/3 request handler (no custom handler)
+    async fn handle_h3_request_simple(
+        request: Request<()>,
+        mut stream: h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
+    ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Read request body
+        let mut body = Vec::new();
+        while let Some(chunk) = stream.recv_data().await? {
+            // chunk is impl Buf, so we need to copy the bytes
+            let mut chunk = chunk;
+            while chunk.has_remaining() {
+                body.push(chunk.get_u8());
+            }
+        }
+
+        debug!(
+            method = %request.method(),
+            uri = %request.uri(),
+            body_len = body.len(),
+            "Processing HTTP/3 request"
+        );
+
+        // Default response
+        let response = Response::builder()
+            .status(200)
+            .header("content-type", "text/plain")
+            .header("server", "prism")
+            .body(())
+            .unwrap();
+
+        stream.send_response(response).await?;
+        stream.send_data(Bytes::from("Hello from HTTP/3 Prism!")).await?;
+        stream.finish().await?;
+
+        Ok(())
+    }
+
+    /// HTTP/3 request handler with custom handler support
+    async fn handle_h3_request_with_handler(
+        request: Request<()>,
+        mut stream: h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
+        handler: Option<Arc<dyn super::H3RequestHandler + Send + Sync>>,
+        remote_addr: SocketAddr,
+    ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Read request body
+        let mut body = Vec::new();
+        while let Some(chunk) = stream.recv_data().await? {
+            let mut chunk = chunk;
+            while chunk.has_remaining() {
+                body.push(chunk.get_u8());
+            }
+        }
+
+        // Convert request to have body
+        let (parts, _) = request.into_parts();
+        let full_request = Request::from_parts(parts, Bytes::from(body));
+
+        // Use handler if available, otherwise return default response
+        let response = if let Some(handler) = handler {
+            handler.handle(full_request, remote_addr).await
+        } else {
+            Response::builder()
+                .status(200)
+                .header("content-type", "text/plain")
+                .header("server", "prism")
+                .body(Full::new(Bytes::from("Hello from HTTP/3 Prism!")))
+                .unwrap()
+        };
+
+        // Send response headers
+        let (parts, body) = response.into_parts();
+        let response_headers = Response::from_parts(parts, ());
+        stream.send_response(response_headers).await?;
+
+        // Send response body - extract Bytes from Full<Bytes>
+        // Full<Bytes> wraps a single Bytes value
+        use http_body_util::BodyExt;
+        let collected = body.collect().await.map_err(|e| {
+            Box::new(std::io::Error::other(format!("Body collect error: {:?}", e)))
+                as Box<dyn std::error::Error + Send + Sync>
+        })?;
+        let body_bytes = collected.to_bytes();
+        if !body_bytes.is_empty() {
+            stream.send_data(body_bytes).await?;
+        }
+
+        stream.finish().await?;
+
+        Ok(())
+    }
+}
+
+// Re-export QUIC implementation when feature is enabled
+// Note: The quic_impl module is used internally by the Http3Listener
+// when the http3 feature is enabled. Methods are exposed via Http3Listener impl.
 
 #[cfg(test)]
 mod tests {

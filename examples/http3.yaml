@@ -1,0 +1,96 @@
+# HTTP/3 (QUIC) Configuration Example
+# Enables HTTP/3 alongside HTTP/1.1 and HTTP/2
+#
+# HTTP/3 uses QUIC protocol over UDP for:
+# - Faster connection establishment (0-RTT)
+# - Multiplexed streams without head-of-line blocking
+# - Built-in connection migration
+# - Improved performance on lossy networks
+#
+# Build with: cargo build --features http3
+# Test with: curl --http3 https://localhost:443/
+
+listeners:
+  # HTTPS listener for HTTP/1.1 and HTTP/2 (TCP)
+  - address: "0.0.0.0:443"
+    protocol: https
+    tls:
+      cert: "/etc/prism/certs/server.crt"
+      key: "/etc/prism/certs/server.key"
+      min_version: "1.3"  # TLS 1.3 required for HTTP/3
+      alpn:
+        - "h2"
+        - "http/1.1"
+    max_connections: 10000
+
+  # Optional HTTP redirect to HTTPS
+  - address: "0.0.0.0:80"
+    protocol: http
+    max_connections: 1000
+
+# HTTP/3 configuration (UDP on same port as HTTPS)
+# The Alt-Svc header will advertise HTTP/3 availability to clients
+http3:
+  enabled: true
+  port: 443  # Same port as HTTPS (UDP vs TCP)
+
+  # Stream settings
+  max_concurrent_streams: 100
+  initial_stream_window_size: 1048576      # 1MB per stream
+  initial_connection_window_size: 10485760  # 10MB per connection
+
+  # Connection settings
+  max_idle_timeout_secs: 30
+  enable_0rtt: true  # Enable 0-RTT for faster reconnections
+
+  # Advertise HTTP/3 via Alt-Svc header in HTTP/2 responses
+  advertise_alt_svc: true
+
+upstreams:
+  backend:
+    servers:
+      - address: "127.0.0.1:8080"
+        weight: 1
+      - address: "127.0.0.1:8081"
+        weight: 1
+    load_balancing: round_robin
+    connect_timeout: 5s
+    request_timeout: 30s
+    health_check:
+      interval: 10s
+      path: "/health"
+      expected_status: 200
+
+routes:
+  # Redirect HTTP to HTTPS
+  - match:
+      path_prefix: "/"
+    handler:
+      type: redirect
+      redirect_url: "https://${host}${path}"
+      redirect_code: 301
+    priority: 100
+    # Only match HTTP listener
+    listener_filter:
+      protocol: http
+
+  # Main route (serves both HTTP/2 and HTTP/3)
+  - match:
+      path_prefix: "/"
+    upstream: backend
+    priority: 0
+
+global:
+  http2: true
+  max_body_size: 10485760  # 10MB
+  shutdown_timeout: 30s
+  request_id: true
+
+observability:
+  metrics:
+    enabled: true
+    path: "/metrics"
+    address: "127.0.0.1:9090"
+  access_log:
+    enabled: true
+    format: json

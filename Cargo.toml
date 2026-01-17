@@ -103,7 +103,8 @@ redis = { version = "0.27", features = ["tokio-comp", "connection-manager"], opt
 
 # HTTP/3 / QUIC (optional)
 quinn = { version = "0.11", optional = true }
-s2n-quic = { version = "1", optional = true }
+h3 = { version = "0.0.8", optional = true }
+h3-quinn = { version = "0.0.10", optional = true }
 
 # SPIFFE/SPIRE (optional)
 spiffe = { version = "0.5", optional = true }
@@ -160,7 +161,7 @@ strip = true
 default = []
 
 # Core optional features
-http3 = ["dep:quinn", "dep:s2n-quic"]  # HTTP/3 with QUIC transport
+http3 = ["dep:quinn", "dep:h3", "dep:h3-quinn"]  # HTTP/3 with QUIC transport
 distributed-rate-limit = ["redis"]  # Distributed rate limiting with Redis
 opentelemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-jaeger-propagator", "dep:tracing-opentelemetry"]  # Distributed tracing
 tui = ["dep:ratatui", "dep:crossterm"]  # Interactive TUI dashboard

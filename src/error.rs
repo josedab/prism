@@ -104,6 +104,10 @@ pub enum PrismError {
     /// Chaos engineering injected failure
     #[error("Chaos injection: {0}")]
     Chaos(String),
+
+    /// Connection errors (QUIC, HTTP/3, etc.)
+    #[error("Connection error: {0}")]
+    Connection(String),
 }
 
 impl From<hyper::Error> for PrismError {

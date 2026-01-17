@@ -25,7 +25,12 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal;
+use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
+
+// HTTP/3 imports
+#[cfg(feature = "http3")]
+use crate::listener::{Http3Config, Http3Listener};
 
 // Feature-gated imports
 #[cfg(feature = "edge")]
@@ -55,8 +60,13 @@ pub struct Server {
     shutdown: ShutdownCoordinator,
     /// Configuration file path (for hot reload)
     config_path: Option<PathBuf>,
+    /// Shutdown broadcast sender
+    shutdown_tx: broadcast::Sender<()>,
 
     // Feature-gated components
+    /// HTTP/3 listener
+    #[cfg(feature = "http3")]
+    h3_listener: Option<Arc<Http3Listener>>,
     /// SPIFFE/SPIRE workload identity client
     #[cfg(feature = "spiffe")]
     spiffe_client: Option<Arc<WorkloadApiClient>>,
@@ -105,6 +115,64 @@ impl Server {
 
         // Create shutdown coordinator with connection draining
         let shutdown = ShutdownCoordinator::new(config.global.shutdown_timeout);
+
+        // Create shutdown broadcast channel
+        let (shutdown_tx, _) = broadcast::channel(1);
+
+        // Wrap core components in Arc for sharing across handlers
+        let router = Arc::new(ArcSwap::new(Arc::new(router)));
+        let upstreams = Arc::new(upstreams);
+        let observability = Arc::new(observability);
+
+        // Initialize HTTP/3 listener if configured
+        #[cfg(feature = "http3")]
+        let h3_listener = if let Some(ref h3_config) = config.http3 {
+            if h3_config.enabled {
+                let listener_config = Http3Config {
+                    enabled: true,
+                    address: format!(
+                        "0.0.0.0:{}",
+                        h3_config.port.unwrap_or(443)
+                    ),
+                    cert_path: config
+                        .listeners
+                        .first()
+                        .and_then(|l| l.tls.as_ref())
+                        .map(|tls| tls.cert.clone()),
+                    key_path: config
+                        .listeners
+                        .first()
+                        .and_then(|l| l.tls.as_ref())
+                        .map(|tls| tls.key.clone()),
+                    idle_timeout_secs: h3_config.max_idle_timeout_secs,
+                    max_concurrent_streams: h3_config.max_concurrent_streams,
+                    stream_receive_window: h3_config.initial_stream_window_size,
+                    connection_receive_window: h3_config.initial_connection_window_size,
+                    enable_0rtt: h3_config.enable_0rtt,
+                    enable_migration: true,
+                    ..Default::default()
+                };
+                info!(
+                    "HTTP/3 enabled on port {}",
+                    h3_config.port.unwrap_or(443)
+                );
+                let listener = Http3Listener::new(listener_config);
+
+                // Set up request handler for HTTP/3 (sharing same Arc instances as Server)
+                let h3_handler = Arc::new(H3Handler::new(
+                    router.clone(),
+                    upstreams.clone(),
+                    observability.clone(),
+                ));
+                listener.set_request_handler(h3_handler);
+
+                Some(Arc::new(listener))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         // Initialize feature-gated components
 
@@ -197,12 +265,15 @@ impl Server {
         Ok(Self {
             config: Arc::new(ArcSwap::new(Arc::new(config))),
             listeners,
-            router: Arc::new(ArcSwap::new(Arc::new(router))),
-            upstreams: Arc::new(upstreams),
-            observability: Arc::new(observability),
+            router,
+            upstreams,
+            observability,
             shutdown,
             config_path,
+            shutdown_tx,
             // Feature-gated components
+            #[cfg(feature = "http3")]
+            h3_listener,
             #[cfg(feature = "spiffe")]
             spiffe_client,
             #[cfg(feature = "xds")]
@@ -269,6 +340,21 @@ impl Server {
             None
         };
 
+        // Start HTTP/3 listener if configured
+        #[cfg(feature = "http3")]
+        let _h3_handle = if let Some(ref listener) = server.h3_listener {
+            let listener = listener.clone();
+            let shutdown_rx = server.shutdown_tx.subscribe();
+            Some(tokio::spawn(async move {
+                info!("Starting HTTP/3 (QUIC) listener");
+                if let Err(e) = listener.listen(shutdown_rx).await {
+                    error!("HTTP/3 listener error: {}", e);
+                }
+            }))
+        } else {
+            None
+        };
+
         // Start listeners
         let mut listener_handles = Vec::new();
 
@@ -308,6 +394,9 @@ impl Server {
 
         // Wait for shutdown signal
         Self::wait_for_shutdown().await;
+
+        // Broadcast shutdown to all listeners (including HTTP/3)
+        let _ = server.shutdown_tx.send(());
 
         // Initiate graceful shutdown with connection draining
         info!("Initiating graceful shutdown...");

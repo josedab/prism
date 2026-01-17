@@ -22,11 +22,19 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use parking_lot::Mutex;
+#[cfg(feature = "http3")]
+use std::future::Future;
 use std::net::SocketAddr;
+#[cfg(feature = "http3")]
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, error, warn};
+
+// HTTP/3 request handler imports
+#[cfg(feature = "http3")]
+use crate::listener::H3RequestHandler;
 
 /// Request handler that processes incoming HTTP requests
 pub struct RequestHandler {
@@ -87,6 +95,91 @@ impl RequestHandler {
         }
 
         Ok(())
+    }
+
+    /// Handle an HTTP/3 request (called from H3 listener)
+    #[cfg(feature = "http3")]
+    pub async fn handle_h3_request(
+        &self,
+        req: Request<Bytes>,
+        addr: SocketAddr,
+    ) -> Response<Full<Bytes>> {
+        let ctx = RequestContext::new().with_client_ip(addr.ip().to_string());
+
+        // Convert to ProxyBody and use existing logic
+        let (parts, body) = req.into_parts();
+        let proxy_req: HttpRequest = Request::from_parts(parts, ProxyBody::buffered(body));
+
+        // Use existing request handling
+        match handle_request_internal(
+            proxy_req,
+            ctx,
+            self.router.clone(),
+            self.upstreams.clone(),
+            self.observability.clone(),
+        )
+        .await
+        {
+            Ok(resp) => resp,
+            Err(_) => Response::builder()
+                .status(500)
+                .body(Full::new(Bytes::from("Internal Server Error")))
+                .unwrap(),
+        }
+    }
+}
+
+/// HTTP/3 request handler adapter
+#[cfg(feature = "http3")]
+pub struct H3Handler {
+    router: Arc<ArcSwap<Router>>,
+    upstreams: Arc<UpstreamManager>,
+    observability: Arc<Observability>,
+}
+
+#[cfg(feature = "http3")]
+impl H3Handler {
+    /// Create a new HTTP/3 handler
+    pub fn new(
+        router: Arc<ArcSwap<Router>>,
+        upstreams: Arc<UpstreamManager>,
+        observability: Arc<Observability>,
+    ) -> Self {
+        Self {
+            router,
+            upstreams,
+            observability,
+        }
+    }
+}
+
+#[cfg(feature = "http3")]
+impl H3RequestHandler for H3Handler {
+    fn handle(
+        &self,
+        request: Request<Bytes>,
+        remote_addr: SocketAddr,
+    ) -> Pin<Box<dyn Future<Output = Response<Full<Bytes>>> + Send>> {
+        let router = self.router.clone();
+        let upstreams = self.upstreams.clone();
+        let observability = self.observability.clone();
+
+        Box::pin(async move {
+            let ctx = RequestContext::new().with_client_ip(remote_addr.ip().to_string());
+
+            // Convert to ProxyBody
+            let (parts, body) = request.into_parts();
+            let proxy_req: HttpRequest = Request::from_parts(parts, ProxyBody::buffered(body));
+
+            // Use existing request handling
+            match handle_request_internal(proxy_req, ctx, router, upstreams, observability).await {
+                Ok(resp) => resp,
+                Err(_) => Response::builder()
+                    .status(500)
+                    .body(Full::new(Bytes::from("Internal Server Error")))
+                    .unwrap(),
+            }
+        })
     }
 }
 
@@ -164,6 +257,82 @@ async fn handle_request(
         status = status,
         duration_ms = duration.as_millis(),
         "Request completed"
+    );
+
+    Ok(response)
+}
+
+/// Handle a request with pre-buffered body (for HTTP/3)
+#[cfg(feature = "http3")]
+async fn handle_request_internal(
+    req: HttpRequest,
+    ctx: RequestContext,
+    router: Arc<ArcSwap<Router>>,
+    upstreams: Arc<UpstreamManager>,
+    observability: Arc<Observability>,
+) -> Result<Response<Full<Bytes>>> {
+    let timer = Timer::start();
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+    let request_id = ctx.request_id.clone();
+    let client_ip = ctx.client_ip.clone().unwrap_or_else(|| "-".to_string());
+
+    debug!(
+        request_id = %request_id,
+        method = %method,
+        path = %path,
+        "Processing HTTP/3 request"
+    );
+
+    // Build access log entry
+    let log_builder = Arc::new(Mutex::new(
+        AccessLogBuilder::new(request_id.clone(), client_ip.clone())
+            .request(&method, &path, "HTTP/3")
+            .user_agent(
+                req.headers()
+                    .get("user-agent")
+                    .and_then(|v| v.to_str().ok()),
+            )
+            .referer(req.headers().get("referer").and_then(|v| v.to_str().ok()))
+            .host(req.headers().get("host").and_then(|v| v.to_str().ok())),
+    ));
+
+    // Route the request
+    let router = router.load();
+    let resolved = router.resolve(&req);
+
+    let response = match resolved {
+        Some(route) => process_route(req, ctx, route, upstreams, log_builder.clone()).await,
+        None => {
+            debug!("No route found for {} {}", method, path);
+            observability.metrics.record_error("no_route");
+            create_error_response(StatusCode::NOT_FOUND, "Not Found")
+        }
+    };
+
+    let status = response.status().as_u16();
+    let duration = timer.elapsed();
+
+    // Record metrics
+    observability
+        .metrics
+        .record_request(&method, &path, status, duration);
+
+    // Record SLO metrics
+    observability.record_slo(&path, &method, status, duration.as_millis() as u64);
+
+    // Log access
+    {
+        let log_builder = log_builder.lock();
+        let log_entry = (*log_builder).clone().response(status, 0).build();
+        observability.access_logger.log(&log_entry);
+    }
+
+    debug!(
+        request_id = %request_id,
+        status = status,
+        duration_ms = duration.as_millis(),
+        "HTTP/3 request completed"
     );
 
     Ok(response)

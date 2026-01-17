@@ -10,6 +10,8 @@ pub use http3::{
     H3StreamType, Http3Config, Http3Listener, Http3Settings, Http3Stats, Http3StatsSnapshot,
     QuicConnectionInfo, QuicConnectionState,
 };
+#[cfg(feature = "http3")]
+pub use http3::H3RequestHandler;
 pub use tls::TlsAcceptor;
 
 use crate::config::{ListenerConfig, Protocol};
