@@ -149,6 +149,9 @@ async fn handle_request(
         .metrics
         .record_request(&method, &path, status, duration);
 
+    // Record SLO metrics
+    observability.record_slo(&path, &method, status, duration.as_millis() as u64);
+
     // Log access
     {
         let log_builder = log_builder.lock();

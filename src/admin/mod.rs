@@ -255,6 +255,8 @@ async fn handle_admin_request(
         (&Method::GET, "/stats") => Ok(handle_stats(&upstreams, &observability)),
         (&Method::GET, "/upstreams") => Ok(handle_upstreams(&upstreams)),
         (&Method::GET, "/metrics") => Ok(handle_metrics(&observability)),
+        (&Method::GET, "/slo") => Ok(handle_slo(&observability)),
+        (&Method::GET, "/slo/alerts") => Ok(handle_slo_alerts(&observability)),
         _ => Ok(json_response(
             StatusCode::NOT_FOUND,
             &ErrorResponse {
@@ -394,6 +396,88 @@ fn handle_metrics(observability: &Observability) -> Response<Full<Bytes>> {
     }
 }
 
+/// SLO snapshots endpoint
+fn handle_slo(observability: &Observability) -> Response<Full<Bytes>> {
+    let snapshots = observability.slo_snapshots();
+
+    if snapshots.is_empty() {
+        return json_response(
+            StatusCode::OK,
+            &SloResponse {
+                enabled: observability.slo_tracker.is_some(),
+                slos: vec![],
+                message: if observability.slo_tracker.is_some() {
+                    Some("No SLO data available yet".to_string())
+                } else {
+                    Some("SLO tracking is not enabled".to_string())
+                },
+            },
+        );
+    }
+
+    let slos: Vec<SloSnapshotResponse> = snapshots
+        .into_iter()
+        .map(|s| SloSnapshotResponse {
+            name: s.name,
+            slo_type: format!("{:?}", s.slo_type),
+            target: s.target,
+            current_sli: s.current_sli,
+            is_meeting_target: s.slo_met,
+            error_budget_remaining: s.error_budget_remaining,
+            burn_rate: s.burn_rate,
+            total_requests: s.total_requests,
+            good_requests: s.good_requests,
+            window_secs: s.window_secs,
+        })
+        .collect();
+
+    json_response(
+        StatusCode::OK,
+        &SloResponse {
+            enabled: true,
+            slos,
+            message: None,
+        },
+    )
+}
+
+/// SLO alerts endpoint
+fn handle_slo_alerts(observability: &Observability) -> Response<Full<Bytes>> {
+    let alerts = observability.check_slo_alerts();
+
+    let alert_responses: Vec<SloAlertResponse> = alerts
+        .into_iter()
+        .map(|a| SloAlertResponse {
+            slo_name: a.slo_name,
+            alert_type: format!("{:?}", a.alert_type),
+            severity: format!("{:?}", a.severity),
+            message: a.message,
+            current_sli: a.current_sli,
+            target_sli: a.target_sli,
+            error_budget_remaining: a.error_budget_remaining,
+            burn_rate: a.burn_rate,
+            timestamp: a.timestamp,
+        })
+        .collect();
+
+    let has_critical = alert_responses
+        .iter()
+        .any(|a| a.severity == "Critical");
+
+    json_response(
+        if has_critical {
+            StatusCode::INTERNAL_SERVER_ERROR
+        } else {
+            StatusCode::OK
+        },
+        &SloAlertsResponse {
+            enabled: observability.slo_tracker.is_some(),
+            alert_count: alert_responses.len(),
+            alerts: alert_responses,
+        },
+    )
+}
+
 /// Create a JSON response
 fn json_response<T: Serialize>(status: StatusCode, body: &T) -> Response<Full<Bytes>> {
     let json = match serde_json::to_string(body) {
@@ -485,4 +569,46 @@ pub struct ServerInfo {
     pub address: String,
     pub healthy: bool,
     pub weight: u32,
+}
+
+#[derive(Serialize)]
+struct SloResponse {
+    enabled: bool,
+    slos: Vec<SloSnapshotResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SloSnapshotResponse {
+    name: String,
+    slo_type: String,
+    target: f64,
+    current_sli: f64,
+    is_meeting_target: bool,
+    error_budget_remaining: f64,
+    burn_rate: f64,
+    total_requests: u64,
+    good_requests: u64,
+    window_secs: u64,
+}
+
+#[derive(Serialize)]
+struct SloAlertsResponse {
+    enabled: bool,
+    alert_count: usize,
+    alerts: Vec<SloAlertResponse>,
+}
+
+#[derive(Serialize)]
+struct SloAlertResponse {
+    slo_name: String,
+    alert_type: String,
+    severity: String,
+    message: String,
+    current_sli: f64,
+    target_sli: f64,
+    error_budget_remaining: f64,
+    burn_rate: f64,
+    timestamp: u64,
 }

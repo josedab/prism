@@ -1054,6 +1054,10 @@ pub struct ObservabilityConfig {
     /// Access log configuration
     #[serde(default)]
     pub access_log: AccessLogConfig,
+
+    /// SLO (Service Level Objective) configuration
+    #[serde(default)]
+    pub slo: Option<crate::observability::SloConfig>,
 }
 
 /// Metrics configuration

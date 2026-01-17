@@ -1,0 +1,234 @@
+# SLO (Service Level Objective) Configuration Example
+#
+# This example demonstrates how to configure SLO tracking with:
+# - Availability SLOs (success rate targets)
+# - Latency SLOs (percentile latency targets)
+# - Error budgets and burn rate alerting
+#
+# Run: prism --config examples/slo.yaml
+
+listeners:
+  - address: "0.0.0.0:8080"
+    protocol: http
+
+upstreams:
+  api_backend:
+    servers:
+      - address: "127.0.0.1:3000"
+      - address: "127.0.0.1:3001"
+    health_check:
+      enabled: true
+      interval: 10s
+      path: /health
+
+routes:
+  - match:
+      path_prefix: "/api"
+    upstream: api_backend
+
+  - match:
+      path_prefix: "/critical"
+    upstream: api_backend
+
+# SLO Configuration
+observability:
+  metrics:
+    enabled: true
+    address: "0.0.0.0:9090"
+
+  access_log:
+    enabled: true
+    format: json
+
+  # SLO tracking configuration
+  slo:
+    enabled: true
+
+    # Define SLO targets
+    targets:
+      # Availability SLO: 99.9% success rate for API endpoints
+      - name: "api-availability"
+        type: availability
+        target: 0.999  # 99.9% success rate (three nines)
+        window: "30d"  # Rolling 30-day window
+        routes:
+          - "/api/*"
+        labels:
+          service: "api"
+          tier: "standard"
+
+      # Stricter availability for critical endpoints
+      - name: "critical-availability"
+        type: availability
+        target: 0.9999  # 99.99% (four nines)
+        window: "30d"
+        routes:
+          - "/critical/*"
+        labels:
+          service: "critical"
+          tier: "premium"
+
+      # Latency SLO: P99 under 100ms
+      - name: "api-latency-p99"
+        type: latency
+        target: 0.99  # 99% of requests must be under threshold
+        percentile: 0.99
+        threshold_ms: 100  # 100ms threshold
+        window: "7d"
+        routes:
+          - "/api/*"
+
+      # Latency SLO: P95 under 50ms
+      - name: "api-latency-p95"
+        type: latency
+        target: 0.95
+        percentile: 0.95
+        threshold_ms: 50
+        window: "7d"
+        routes:
+          - "/api/*"
+
+      # Error rate SLO: Less than 0.1% errors
+      - name: "api-error-rate"
+        type: error_rate
+        target: 0.999  # 99.9% non-error (0.1% error budget)
+        window: "7d"
+        routes:
+          - "/api/*"
+
+    # Alerting configuration
+    alerting:
+      enabled: true
+      # Alert when error budget is 50% consumed
+      budget_alert_threshold: 0.5
+      # 5 minute cooldown between alerts
+      alert_cooldown_secs: 300
+      # Optional webhook for alerts
+      # webhook_url: "https://hooks.slack.com/services/xxx"
+
+    # Burn rate windows for multi-window SLO alerting
+    # Based on Google SRE book recommendations
+    burn_rate_windows:
+      # Fast burn: alerts if we'll exhaust 30-day budget in ~2 days
+      - name: "fast"
+        short_window_minutes: 5
+        long_window_minutes: 60
+        burn_rate_threshold: 14.4
+
+      # Slow burn: alerts if we'll exhaust 30-day budget in ~5 days
+      - name: "slow"
+        short_window_minutes: 30
+        long_window_minutes: 360
+        burn_rate_threshold: 6.0
+
+      # Very slow burn: alerts if we'll exhaust budget in ~10 days
+      - name: "gradual"
+        short_window_minutes: 120
+        long_window_minutes: 1440
+        burn_rate_threshold: 3.0
+
+---
+# Understanding SLO Metrics
+#
+# The SLO tracker exposes Prometheus metrics:
+#
+# prism_slo_sli{name="api-availability"} 0.999523
+#   Current Service Level Indicator (actual performance)
+#
+# prism_slo_target{name="api-availability"} 0.999
+#   SLO target value
+#
+# prism_slo_error_budget_remaining{name="api-availability"} 0.523
+#   Remaining error budget (0-1, where 1 = 100% remaining)
+#
+# prism_slo_burn_rate{name="api-availability"} 1.2
+#   Current burn rate (1.0 = consuming at exactly allowed rate)
+#
+# prism_slo_compliance{name="api-availability"} 1
+#   Whether SLO is currently met (1=yes, 0=no)
+#
+# prism_slo_total_requests{name="api-availability"} 1000000
+#   Total requests in current window
+#
+# prism_slo_good_requests{name="api-availability"} 999523
+#   Good (successful/fast) requests in current window
+
+---
+# Error Budget Calculation
+#
+# For a 99.9% SLO (target=0.999):
+#   - Allowed error rate = 1 - 0.999 = 0.1%
+#   - If actual success rate is 99.8%:
+#     - Actual error rate = 0.2%
+#     - Budget consumed = 0.2% / 0.1% = 200% (over budget!)
+#     - Budget remaining = max(0, 1 - 2.0) = 0%
+#
+# For a 99.9% SLO with 99.95% actual:
+#   - Actual error rate = 0.05%
+#   - Budget consumed = 0.05% / 0.1% = 50%
+#   - Budget remaining = 50%
+
+---
+# Burn Rate Alerting
+#
+# Burn rate = (actual error rate) / (allowed error rate)
+#
+# A burn rate of 1.0 means you're consuming budget exactly as fast as allowed.
+# A burn rate of 14.4 means you're consuming budget 14.4x faster than allowed,
+# which would exhaust a 30-day budget in roughly 2 days.
+#
+# Multi-window burn rate (Google SRE approach):
+#   - Short window: Detects recent spikes
+#   - Long window: Confirms sustained issues
+#   - Alert only when BOTH windows exceed threshold
+#
+# This reduces alert noise from brief spikes while still catching
+# sustained degradation.
+
+---
+# Per-Route SLOs
+#
+# You can define different SLOs for different routes:
+#
+# targets:
+#   - name: "payments-availability"
+#     type: availability
+#     target: 0.9999
+#     routes:
+#       - "/api/payments/*"
+#       - "/api/checkout/*"
+#
+#   - name: "search-latency"
+#     type: latency
+#     target: 0.95
+#     threshold_ms: 200
+#     routes:
+#       - "/api/search/*"
+#
+#   - name: "static-availability"
+#     type: availability
+#     target: 0.999
+#     routes:
+#       - "/static/*"
+#       - "/assets/*"
+
+---
+# Method-Specific SLOs
+#
+# You can also filter by HTTP method:
+#
+# targets:
+#   - name: "read-availability"
+#     type: availability
+#     target: 0.9999
+#     methods:
+#       - GET
+#       - HEAD
+#
+#   - name: "write-availability"
+#     type: availability
+#     target: 0.999
+#     methods:
+#       - POST
+#       - PUT
+#       - DELETE

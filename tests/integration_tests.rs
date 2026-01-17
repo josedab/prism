@@ -65,6 +65,7 @@ fn create_test_config() -> Config {
         edge: None,
         plugins: None,
         http3: None,
+        l4: None,
         anomaly_detection: None,
         ebpf: None,
         graphql: None,
