@@ -63,6 +63,10 @@ pub struct Config {
     #[serde(default)]
     pub http3: Option<Http3ConfigDef>,
 
+    /// Layer 4 (TCP/UDP) proxy configuration
+    #[serde(default)]
+    pub l4: Option<crate::l4::L4Config>,
+
     /// AI anomaly detection configuration
     #[serde(default)]
     pub anomaly_detection: Option<AnomalyConfigDef>,

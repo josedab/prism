@@ -1,0 +1,158 @@
+# Layer 4 (TCP/UDP) Proxy Configuration Example
+#
+# This example demonstrates how to configure Prism as a Layer 4 proxy
+# for non-HTTP services like databases, DNS, and message queues.
+
+# HTTP listeners (standard Prism config)
+listeners:
+  - address: "0.0.0.0:8080"
+    protocol: http
+
+# HTTP upstreams for web traffic
+upstreams:
+  web_backend:
+    servers:
+      - address: "127.0.0.1:3000"
+
+# HTTP routes
+routes:
+  - match:
+      path_prefix: "/"
+    upstream: web_backend
+
+# Layer 4 Proxy Configuration
+l4:
+  # L4 Listeners
+  listeners:
+    # PostgreSQL proxy
+    - name: postgres
+      address: "0.0.0.0:5432"
+      protocol: tcp
+      upstream: postgres_cluster
+      connect_timeout: 10s
+      idle_timeout: 300s
+      tcp_keepalive: true
+      keepalive_interval: 60s
+      tcp_nodelay: true
+      buffer_size: 65536
+      max_connections: 1000
+
+    # MySQL proxy
+    - name: mysql
+      address: "0.0.0.0:3306"
+      protocol: tcp
+      upstream: mysql_cluster
+      connect_timeout: 10s
+      idle_timeout: 300s
+
+    # Redis proxy
+    - name: redis
+      address: "0.0.0.0:6379"
+      protocol: tcp
+      upstream: redis_cluster
+      connect_timeout: 5s
+      idle_timeout: 60s
+
+    # DNS proxy (UDP)
+    - name: dns
+      address: "0.0.0.0:53"
+      protocol: udp
+      upstream: dns_servers
+      idle_timeout: 30s
+      buffer_size: 512
+
+    # Secure PostgreSQL with TLS termination
+    - name: postgres_tls
+      address: "0.0.0.0:5433"
+      protocol: tcp
+      upstream: postgres_cluster
+      tls:
+        cert: /path/to/server.crt
+        key: /path/to/server.key
+        client_auth: false
+
+    # TLS passthrough (for services that handle their own TLS)
+    - name: tls_passthrough
+      address: "0.0.0.0:8443"
+      protocol: tcp
+      upstream: tls_backend
+      tls:
+        passthrough: true
+
+  # L4 Upstreams
+  upstreams:
+    # PostgreSQL cluster with least-connections balancing
+    postgres_cluster:
+      servers:
+        - address: "10.0.0.1:5432"
+          weight: 1
+        - address: "10.0.0.2:5432"
+          weight: 1
+        - address: "10.0.0.3:5432"
+          weight: 1
+      load_balancing: least_connections
+      connection_pooling: true
+      pool_size: 10
+      health_check:
+        check_type: tcp_connect
+        interval: 5s
+        timeout: 3s
+        healthy_threshold: 2
+        unhealthy_threshold: 3
+
+    # MySQL cluster with round-robin
+    mysql_cluster:
+      servers:
+        - address: "10.0.1.1:3306"
+        - address: "10.0.1.2:3306"
+      load_balancing: round_robin
+      health_check:
+        check_type: tcp_connect
+        interval: 10s
+        timeout: 5s
+
+    # Redis cluster with IP hash for session affinity
+    redis_cluster:
+      servers:
+        - address: "10.0.2.1:6379"
+        - address: "10.0.2.2:6379"
+        - address: "10.0.2.3:6379"
+      load_balancing: ip_hash
+      health_check:
+        check_type: tcp_connect
+        interval: 5s
+
+    # DNS servers with weighted round-robin
+    dns_servers:
+      servers:
+        - address: "8.8.8.8:53"
+          weight: 2
+        - address: "8.8.4.4:53"
+          weight: 1
+        - address: "1.1.1.1:53"
+          weight: 2
+      load_balancing: weighted_round_robin
+      health_check:
+        check_type: udp_probe
+        interval: 30s
+        timeout: 5s
+        # DNS query for "." (root)
+        udp_probe: "000001000001000000000000000001"
+
+    # TLS backend (passthrough)
+    tls_backend:
+      servers:
+        - address: "10.0.3.1:443"
+          tls: true
+        - address: "10.0.3.2:443"
+          tls: true
+      load_balancing: round_robin
+
+# Observability
+observability:
+  metrics:
+    enabled: true
+    address: "0.0.0.0:9090"
+  access_log:
+    enabled: true
+    format: json

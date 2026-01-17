@@ -55,6 +55,9 @@ pub mod server;
 pub mod upstream;
 pub mod websocket;
 
+/// Layer 4 (TCP/UDP) proxying for databases and non-HTTP services
+pub mod l4;
+
 // Feature-gated modules
 
 /// Edge computing / Cloudflare Workers-style functions
