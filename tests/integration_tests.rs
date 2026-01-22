@@ -69,6 +69,8 @@ fn create_test_config() -> Config {
         anomaly_detection: None,
         ebpf: None,
         graphql: None,
+        gitops: None,
+        llm_gateway: None,
     }
 }
 

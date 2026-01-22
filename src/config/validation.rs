@@ -391,6 +391,8 @@ mod tests {
             anomaly_detection: None,
             ebpf: None,
             graphql: None,
+            gitops: None,
+            llm_gateway: None,
         }
     }
 

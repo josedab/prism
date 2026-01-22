@@ -142,6 +142,8 @@ mod tests {
             anomaly_detection: None,
             ebpf: None,
             graphql: None,
+            gitops: None,
+            llm_gateway: None,
         }
     }
 
@@ -153,7 +155,7 @@ mod tests {
 
     #[test]
     fn test_validate_reload_changed_listeners() {
-        let mut config1 = create_test_config();
+        let config1 = create_test_config();
         let mut config2 = create_test_config();
 
         config2.listeners[0].address = "0.0.0.0:9090".to_string();
