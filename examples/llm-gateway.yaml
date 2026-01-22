@@ -1,0 +1,166 @@
+# Prism LLM Gateway Example Configuration
+# This configuration sets up Prism as an AI/LLM Gateway with multi-provider support
+
+listeners:
+  - address: "0.0.0.0:8080"
+    protocol: http
+
+# LLM Gateway Configuration
+llm_gateway:
+  enabled: true
+
+  # Default provider to use if not specified in request
+  default_provider: openai
+
+  # Provider configurations
+  providers:
+    # OpenAI Configuration
+    openai:
+      type: openai
+      api_key: "${OPENAI_API_KEY}"
+      base_url: "https://api.openai.com/v1"
+      models:
+        - gpt-4
+        - gpt-4-turbo-preview
+        - gpt-3.5-turbo
+      timeout: 120s
+      max_retries: 3
+
+    # Anthropic Configuration
+    anthropic:
+      type: anthropic
+      api_key: "${ANTHROPIC_API_KEY}"
+      base_url: "https://api.anthropic.com/v1"
+      models:
+        - claude-3-opus-20240229
+        - claude-3-sonnet-20240229
+        - claude-3-haiku-20240307
+      timeout: 120s
+      max_retries: 3
+
+    # Self-hosted Ollama
+    ollama:
+      type: ollama
+      base_url: "http://localhost:11434"
+      models:
+        - llama2
+        - mistral
+        - codellama
+      timeout: 300s  # Local models may need more time
+
+    # Azure OpenAI
+    azure:
+      type: azure_openai
+      api_key: "${AZURE_OPENAI_KEY}"
+      base_url: "https://your-resource.openai.azure.com"
+      api_version: "2024-02-01"
+      models:
+        - gpt-4
+      timeout: 120s
+
+  # Token-based rate limiting
+  token_rate_limit:
+    enabled: true
+    default_tokens_per_minute: 100000
+    default_requests_per_minute: 1000
+    burst_multiplier: 1.5
+    # Per-key limits (identified by API key or header)
+    limits:
+      premium:
+        tokens_per_minute: 500000
+        requests_per_minute: 5000
+      standard:
+        tokens_per_minute: 50000
+        requests_per_minute: 500
+
+  # Prompt caching for common requests
+  prompt_cache:
+    enabled: true
+    max_entries: 10000
+    ttl: 1h
+    # Cache key includes: model, prompt hash, temperature
+    include_temperature: true
+
+  # Cost tracking and budgets
+  cost_tracking:
+    enabled: true
+    # Per-provider cost per 1K tokens (input/output)
+    costs:
+      openai:
+        gpt-4:
+          input: 0.03
+          output: 0.06
+        gpt-3.5-turbo:
+          input: 0.0005
+          output: 0.0015
+      anthropic:
+        claude-3-opus-20240229:
+          input: 0.015
+          output: 0.075
+        claude-3-sonnet-20240229:
+          input: 0.003
+          output: 0.015
+    # Budget alerts
+    alerts:
+      - threshold: 100
+        action: log
+      - threshold: 500
+        action: notify
+      - threshold: 1000
+        action: block
+
+  # Fallback configuration
+  fallback:
+    enabled: true
+    # Fallback order when primary provider fails
+    chains:
+      default:
+        - openai
+        - anthropic
+        - ollama
+      cost_optimized:
+        - ollama
+        - openai
+      quality_first:
+        - anthropic
+        - openai
+    # Conditions that trigger fallback
+    on_error_codes:
+      - 429  # Rate limited
+      - 500  # Server error
+      - 503  # Service unavailable
+    on_timeout: true
+    max_fallback_attempts: 3
+
+# Standard proxy routes
+upstreams:
+  api_backend:
+    servers:
+      - address: "127.0.0.1:3000"
+
+routes:
+  # LLM proxy route - handled by LLM gateway middleware
+  - match:
+      path_prefix: "/v1/chat/completions"
+    middleware:
+      - llm_gateway
+
+  - match:
+      path_prefix: "/v1/completions"
+    middleware:
+      - llm_gateway
+
+  # Regular API routes
+  - match:
+      path_prefix: "/api"
+    upstream: api_backend
+
+# Observability
+observability:
+  metrics:
+    enabled: true
+    endpoint: "/metrics"
+
+  logging:
+    level: info
+    format: json
