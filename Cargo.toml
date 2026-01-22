@@ -87,6 +87,7 @@ crossterm = { version = "0.28", optional = true }
 jsonwebtoken = "9"
 subtle = "2"  # Constant-time comparison for security
 sha2 = "0.10"  # For PKCE S256 challenge
+hmac = "0.12"  # For webhook signature validation
 
 # OpenTelemetry (optional)
 opentelemetry = { version = "0.27", optional = true }

@@ -1,0 +1,185 @@
+# Prism GitOps Configuration Example
+# This configuration enables GitOps-native configuration management
+
+listeners:
+  - address: "0.0.0.0:8080"
+    protocol: http
+
+# GitOps Configuration
+gitops:
+  enabled: true
+
+  # Git repository configuration
+  repository:
+    url: "https://github.com/your-org/prism-config.git"
+    branch: main
+    path: "config/production"  # Path within repo to config files
+    clone_dir: /var/lib/prism/gitops
+
+    # Authentication (choose one method)
+    auth:
+      # Option 1: SSH key
+      # type: ssh
+      # ssh_key_path: /etc/prism/github-deploy-key
+
+      # Option 2: Personal Access Token
+      type: token
+      username: "git"
+      password: "${GITHUB_TOKEN}"
+
+      # Option 3: GitHub App (recommended for organizations)
+      # type: github_app
+      # github_app_id: 12345
+      # github_installation_id: 67890
+      # github_private_key_path: /etc/prism/github-app-key.pem
+
+    # Shallow clone for faster updates
+    depth: 1
+
+  # Sync configuration
+  sync:
+    # How often to check for updates (poll mode)
+    poll_interval: 60s
+
+    # Sync mode: poll, webhook, or hybrid
+    mode: hybrid
+
+    # Retry configuration
+    max_retries: 3
+    retry_backoff: 5s
+
+    # File pattern to match config files
+    config_pattern: "*.yaml"
+
+    # Don't actually apply changes (for testing)
+    dry_run: false
+
+    # Remove configurations that no longer exist in git
+    prune: true
+
+  # Validation before applying
+  validation:
+    # Strict mode enables additional checks
+    strict: true
+
+    # Validate that upstreams are reachable
+    check_upstreams: false  # Disable in CI/CD
+
+    # Validate TLS certificate files exist
+    check_tls_files: true
+
+    # Required sections (fail if missing)
+    required_sections:
+      - listeners
+      - upstreams
+
+    # Forbidden patterns (fail if present)
+    forbidden_patterns:
+      - "password:\\s*['\"]?[^$]"  # Plain text passwords
+
+    # Custom validation webhook
+    # custom_webhook: "https://validator.internal/validate"
+
+  # Rollback configuration
+  rollback:
+    enabled: true
+
+    # Number of config versions to keep
+    history_limit: 10
+
+    # Automatically rollback on health check failure
+    on_health_failure: true
+
+    # Wait this long after apply before health check
+    grace_period: 30s
+
+    # Health check configuration
+    health_check:
+      endpoint: "http://localhost:8080/health"
+      expected_statuses: [200]
+      timeout: 5s
+      success_threshold: 3
+
+  # Webhook server for push-based updates
+  webhook:
+    address: "0.0.0.0:9090"
+    path: "/webhook/gitops"
+    secret: "${WEBHOOK_SECRET}"
+    provider: github  # github, gitlab, bitbucket, gitea, generic
+
+  # Multi-environment support
+  environments:
+    staging:
+      branch: staging
+      path_prefix: "config/staging"
+      require_approval: false
+
+    production:
+      branch: main
+      path_prefix: "config/production"
+      promote_from: staging
+      promotion_strategy: health_based
+      require_approval: true
+
+  # Notifications
+  notifications:
+    # Events to notify on
+    events:
+      - sync_success
+      - sync_failure
+      - rollback
+      - validation_failure
+
+    # Slack notifications
+    slack:
+      webhook_url: "${SLACK_WEBHOOK_URL}"
+      channel: "#prism-alerts"
+      username: "Prism GitOps"
+
+    # Generic webhook (for custom integrations)
+    # webhook:
+    #   url: "https://your-webhook.example.com/notify"
+    #   method: POST
+    #   headers:
+    #     Authorization: "Bearer ${WEBHOOK_TOKEN}"
+
+# Example upstreams (would typically come from GitOps repo)
+upstreams:
+  backend:
+    servers:
+      - address: "127.0.0.1:3000"
+    health_check:
+      enabled: true
+      interval: 10s
+      path: /health
+
+routes:
+  - match:
+      path_prefix: "/"
+    upstream: backend
+
+# Observability
+observability:
+  metrics:
+    enabled: true
+    endpoint: "/metrics"
+    # GitOps-specific metrics are automatically exposed:
+    # - prism_gitops_sync_total
+    # - prism_gitops_sync_errors_total
+    # - prism_gitops_last_sync_timestamp
+    # - prism_gitops_config_version
+
+  logging:
+    level: info
+    format: json
+
+# Admin API (for GitOps status)
+admin:
+  address: "127.0.0.1:9091"
+  endpoints:
+    gitops:
+      enabled: true
+      # GET /admin/gitops/status - Current sync status
+      # GET /admin/gitops/history - Config version history
+      # POST /admin/gitops/sync - Trigger manual sync
+      # POST /admin/gitops/rollback - Trigger rollback
