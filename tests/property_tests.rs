@@ -3,7 +3,6 @@
 //! These tests use proptest to verify properties hold for arbitrary inputs.
 
 use proptest::prelude::*;
-use std::collections::HashMap;
 
 // ============================================================================
 // Path Matching Properties

@@ -110,6 +110,7 @@ mod tests {
     use http::Response;
     use http_body_util::Full;
 
+    #[allow(dead_code)]
     struct TestMiddleware {
         name: &'static str,
         add_header: String,
@@ -137,6 +138,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     struct TestHandler;
 
     #[async_trait]

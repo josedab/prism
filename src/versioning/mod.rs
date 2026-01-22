@@ -646,7 +646,7 @@ mod tests {
 
     #[test]
     fn test_media_type_versioning() {
-        let manager = create_manager();
+        let _manager = create_manager();
 
         let mut headers = HashMap::new();
         headers.insert(

@@ -231,9 +231,9 @@ mod tests {
             burst: 10,
             key_by: RateLimitKey::Global,
         };
-        let limiter = RateLimiter::new(&config).unwrap();
+        let _limiter = RateLimiter::new(&config).unwrap();
 
-        let ctx = RequestContext::new().with_client_ip("1.2.3.4".to_string());
+        let _ctx = RequestContext::new().with_client_ip("1.2.3.4".to_string());
 
         // For global key, should always be "global"
         // Note: We'd need an actual HttpRequest to test this properly

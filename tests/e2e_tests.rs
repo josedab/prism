@@ -99,6 +99,7 @@ async fn http_get(url: &str) -> Result<(StatusCode, String), reqwest::Error> {
     Ok((status, body))
 }
 
+#[allow(dead_code)]
 async fn http_post(url: &str, body: &str) -> Result<(StatusCode, String), reqwest::Error> {
     let client = reqwest::Client::new();
     let response = client.post(url).body(body.to_string()).send().await?;

@@ -569,9 +569,9 @@ mod tests {
         assert!(matches!(result2, CoalescingResult::Waiter(_)));
 
         // Complete leader and check waiter receives response
-        if let CoalescingResult::Leader(mut handle) = result1 {
+        if let CoalescingResult::Leader(handle) = result1 {
             // Add the waiter from result2
-            if let CoalescingResult::Waiter(rx) = result2 {
+            if let CoalescingResult::Waiter(_rx) = result2 {
                 // Note: In real usage, waiters are added to the pending request
                 // This test just verifies the flow
                 handle.complete(CoalescedResponse {

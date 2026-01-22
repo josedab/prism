@@ -862,7 +862,7 @@ mod tests {
         let registry = CircuitBreakerRegistry::new(AdaptiveCircuitBreakerConfig::default());
 
         let cb1 = registry.get_or_create("service-a");
-        let cb2 = registry.get_or_create("service-b");
+        let _cb2 = registry.get_or_create("service-b");
         let cb1_again = registry.get_or_create("service-a");
 
         // Same instance returned
