@@ -46,9 +46,12 @@
 pub mod admin;
 pub mod config;
 pub mod error;
+pub mod gitops;
 pub mod grpc;
 pub mod listener;
+pub mod llm;
 pub mod middleware;
+pub mod migrate;
 pub mod observability;
 pub mod router;
 pub mod server;

@@ -6,10 +6,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 /// Root configuration structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// Listener configurations
+    #[serde(default)]
     pub listeners: Vec<ListenerConfig>,
 
     /// Upstream backend configurations
@@ -78,6 +79,14 @@ pub struct Config {
     /// GraphQL-aware routing configuration
     #[serde(default)]
     pub graphql: Option<GraphQLConfigDef>,
+
+    /// LLM Gateway configuration
+    #[serde(default)]
+    pub llm_gateway: Option<crate::llm::LlmGatewayConfig>,
+
+    /// GitOps configuration
+    #[serde(default)]
+    pub gitops: Option<GitOpsConfigDef>,
 }
 
 /// Listener configuration
@@ -1876,4 +1885,139 @@ pub struct GraphQLOperationRouteDef {
     /// Rate limit for this operation
     #[serde(default)]
     pub rate_limit: Option<u32>,
+}
+
+// ============================================
+// GitOps Configuration Types
+// ============================================
+
+/// GitOps configuration for config file
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitOpsConfigDef {
+    /// Enable GitOps mode
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Git repository URL
+    pub repository: Option<String>,
+
+    /// Branch to watch
+    #[serde(default = "default_git_branch")]
+    pub branch: String,
+
+    /// Path to config within the repository
+    #[serde(default = "default_config_path")]
+    pub config_path: String,
+
+    /// Polling interval (seconds)
+    #[serde(default = "default_poll_interval")]
+    pub poll_interval_secs: u64,
+
+    /// Authentication method
+    #[serde(default)]
+    pub auth: GitAuthConfig,
+
+    /// Enable automatic rollback on validation failure
+    #[serde(default = "default_true")]
+    pub auto_rollback: bool,
+
+    /// Health check grace period after config change (seconds)
+    #[serde(default = "default_health_grace_period")]
+    pub health_grace_period_secs: u64,
+
+    /// Maximum rollback attempts
+    #[serde(default = "default_max_rollback_attempts")]
+    pub max_rollback_attempts: u32,
+
+    /// Webhook configuration for external triggers
+    #[serde(default)]
+    pub webhook: Option<GitOpsWebhookConfig>,
+}
+
+fn default_git_branch() -> String {
+    "main".to_string()
+}
+
+fn default_config_path() -> String {
+    "prism.yaml".to_string()
+}
+
+fn default_poll_interval() -> u64 {
+    60
+}
+
+fn default_health_grace_period() -> u64 {
+    30
+}
+
+fn default_max_rollback_attempts() -> u32 {
+    3
+}
+
+/// Git authentication configuration
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitAuthConfig {
+    /// Authentication type: "none", "ssh", "https", "token"
+    #[serde(default)]
+    pub auth_type: GitAuthType,
+
+    /// SSH private key path
+    pub ssh_key_path: Option<PathBuf>,
+
+    /// SSH key passphrase (use ${VAR} for env var)
+    pub ssh_passphrase: Option<String>,
+
+    /// Username for HTTPS auth
+    pub username: Option<String>,
+
+    /// Password or token for HTTPS auth (use ${VAR} for env var)
+    pub password: Option<String>,
+
+    /// Personal access token (use ${VAR} for env var)
+    pub token: Option<String>,
+}
+
+/// Git authentication types
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GitAuthType {
+    /// No authentication (public repos)
+    #[default]
+    None,
+    /// SSH key authentication
+    Ssh,
+    /// HTTPS with username/password
+    Https,
+    /// Personal access token
+    Token,
+}
+
+/// GitOps webhook configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitOpsWebhookConfig {
+    /// Enable webhook endpoint
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Webhook endpoint path
+    #[serde(default = "default_webhook_path")]
+    pub path: String,
+
+    /// Secret for webhook validation (use ${VAR} for env var)
+    pub secret: Option<String>,
+
+    /// Supported webhook providers
+    #[serde(default = "default_webhook_providers")]
+    pub providers: Vec<String>,
+}
+
+fn default_webhook_path() -> String {
+    "/hooks/gitops".to_string()
+}
+
+fn default_webhook_providers() -> Vec<String> {
+    vec!["github".to_string(), "gitlab".to_string()]
 }
